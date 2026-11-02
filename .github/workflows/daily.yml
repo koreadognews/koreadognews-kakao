@@ -1,1 +1,19 @@
 
+name: Korean Pet Industry Daily
+
+'on':
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check Python
+        run: python --version
+
+      - name: Test newsletter workflow
+        run: echo "Korean Pet Industry Daily Ready"
