@@ -1,1 +1,17 @@
 
+
+name: KDogNews Test
+
+'on':
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Test
+        run: echo "KDogNews Test Success"
