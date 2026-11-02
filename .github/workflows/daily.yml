@@ -1,7 +1,10 @@
 
 name: Korean Pet Industry Daily
 
+
 'on':
+  schedule:
+    - cron: '0 21 * * *'
   workflow_dispatch:
     inputs:
       send_kakao:
@@ -9,6 +12,7 @@ name: Korean Pet Industry Daily
         type: boolean
         required: true
         default: false
+
 
 permissions:
   contents: read
@@ -79,6 +83,21 @@ jobs:
           echo "Newsletter page not available"
           exit 1
 
+      
+      - name: Check token update permission
+        if: ${{ inputs.send_kakao == true || github.event_name == 'schedule' }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_SECRETS_TOKEN }}
+        run: |
+          test -n "$GH_TOKEN"
+          gh api repos/koreadognews/koreadognews-kakao/actions/secrets/public-key > /dev/null
+
       - name: Send Kakao message
-        if: ${{ inputs.send_kakao == true }}
+        if: ${{ inputs.send_kakao == true || github.event_name == 'schedule' }}
         run: python bot.py --send-only --send
+
+      - name: Save renewed Kakao token
+        if: ${{ always() && (inputs.send_kakao == true || github.event_name == 'schedule') }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_SECRETS_TOKEN }}
+        run: python sync_kakao_token.py
