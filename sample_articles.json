@@ -1,0 +1,11 @@
+{
+  "articles": [
+    {
+      "title": "예시 기사 제목 (실제 발송 불가: 검증용 자료로 바꿔야 함)",
+      "url": "https://www.koreadognews.co.kr",
+      "publisher": "한국애견신문",
+      "publication_date": "2026-11-02",
+      "summary": "샘플 파일입니다. 실제 기사로 교체한 뒤 날짜와 URL을 확인하세요."
+    }
+  ]
+}
