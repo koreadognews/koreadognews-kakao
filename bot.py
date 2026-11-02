@@ -35,7 +35,6 @@ def issue_number(date):
     # Editorial issue numbers may skip non-publication days; edit if necessary.
     return base + (date - origin).days
 
-
 def fetch_research(date):
        from openai import (
         OpenAI,
