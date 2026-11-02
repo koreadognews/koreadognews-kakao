@@ -11,7 +11,9 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
 from urllib.parse import urlparse
+
 from zoneinfo import ZoneInfo
 
 import requests
@@ -35,10 +37,48 @@ def issue_number(date):
 
 
 def fetch_research(date):
-    from openai import OpenAI
-    client = OpenAI()
+       from openai import (
+        OpenAI,
+        APIConnectionError,
+        APITimeoutError,
+        InternalServerError,
+        RateLimitError,
+    )
+    client = OpenAI(max_retries=0)
+
     prompt = f'''Search the live web for actual coverage first published on {date.isoformat()} in Korean local time. Search Korean and international pet business and specifically site:koreadognews.co.kr. Exclude all festivals, pet fairs, cultural events, lifestyle and celebrity articles. Seek actual industry news: investment, corporate results, M&A, food, veterinary medicine, insurance, AI, technology, distribution, exports and policy. Return up to 15 DISTINCT verified candidate articles. Each needs publisher, exact source article URL (never invented and avoid news index/search URLs), publication_date in YYYY-MM-DD, accurate Korean headline, and a one-sentence neutral summary. Return ONLY JSON object {{"articles":[{{"title":"...","url":"https://...","publisher":"...","publication_date":"YYYY-MM-DD","summary":"..."}}]}}. Do NOT pad to 15, NEVER invent source URLs, and drop uncertain dates. Prefer industry relevance. For an article from koreadognews.co.kr, include it only if it qualifies. Do not return markdown.''' 
-    response = client.responses.create(model=os.getenv('OPENAI_MODEL', 'gpt-5-mini'), tools=[{'type':'web_search'}], input=prompt)
+    
+    for attempt in range(3):
+        try:
+            response = client.responses.create(
+                model=os.getenv('OPENAI_MODEL', 'gpt-5-mini'),
+                tools=[{'type': 'web_search'}],
+                input=prompt,
+            )
+            break
+
+        except (APIConnectionError, APITimeoutError,
+                InternalServerError, RateLimitError) as error:
+
+            if isinstance(error, RateLimitError):
+                detail = str(error).lower()
+                if any(word in detail for word in (
+                    'insufficient_quota',
+                    'no credits remaining',
+                    'billing',
+                    'quota exceeded',
+                )):
+                    raise
+
+            if attempt == 2:
+                raise
+
+            delay = 20 if attempt == 0 else 60
+            logging.warning(
+                "OpenAI temporary error. Retrying in %s seconds (%s/3)",
+                delay, attempt + 1
+            )
+            time.sleep(delay)
     raw = response.output_text.strip()
     match = re.search(r'\{.*\}', raw, re.S)
     if not match:
