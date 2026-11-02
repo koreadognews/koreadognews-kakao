@@ -154,7 +154,8 @@ def main():
     message=f'🔹반려동물산업 소식지🔹\n{publish_date} · {len(articles)}건\n{highlights}\n전체 기사 보기'
     print(f'Generated {path}: {len(articles)} items; landing URL: {link}')
     if args.send:
-        send_kakao(message,link)
+        link = f"{os.environ['PUBLIC_BASE_URL'].rstrip('/')}/{date}.html"
+        send_kakao(message, link)
         print('Kakao API reported successful send')
     else:
         print('DRY RUN: no Kakao message sent')
