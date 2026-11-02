@@ -3,17 +3,82 @@ name: Korean Pet Industry Daily
 
 'on':
   workflow_dispatch:
+    inputs:
+      send_kakao:
+        description: 'Send Kakao message?'
+        type: boolean
+        required: true
+        default: false
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: koreadognews-pages
+  cancel-in-progress: false
 
 jobs:
-  check:
+  newsletter:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
+      KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
+      KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
+      PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+      OPENAI_MODEL: gpt-5-mini
 
     steps:
-      - name: Check Python
-        run: python --version
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Test newsletter workflow
-        run: echo "Korean Pet Industry Daily Ready"
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Generate newsletter
+        run: python bot.py
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: docs
+
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Verify newsletter URL
+        shell: bash
+        run: |
+          DAY=$(TZ=Asia/Seoul date -d yesterday +%F)
+          URL="${PUBLIC_BASE_URL%/}/${DAY}.html"
+          for i in $(seq 1 20); do
+            if curl --fail --silent --location "$URL" \
+              | grep -q "기사 기준일 ${DAY}"; then
+              echo "Newsletter page verified"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "Newsletter page not available"
+          exit 1
+
+      - name: Send Kakao message
+        if: ${{ inputs.send_kakao == true }}
+        run: python bot.py --send-only --send
