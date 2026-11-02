@@ -13,11 +13,11 @@ name: Korean Pet Industry Daily
         required: true
         default: false
 
-
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
+
 
 concurrency:
   group: koreadognews-pages
@@ -128,10 +128,12 @@ jobs:
         run: |
           test -n "$GH_TOKEN"
           gh api repos/koreadognews/koreadognews-kakao/actions/secrets/public-key > /dev/null
-
+     
       - name: Send Kakao message
         if: ${{ inputs.send_kakao == true || github.event_name == 'schedule' }}
-        run: python bot.py --send-only --send
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python send_once.py
 
       - name: Save renewed Kakao token
         if: ${{ always() && (inputs.send_kakao == true || github.event_name == 'schedule') }}
