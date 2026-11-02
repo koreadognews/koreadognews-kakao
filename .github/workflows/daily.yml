@@ -1,5 +1,5 @@
 
-name: Korean Pet Industry Daily
+name: Korean Pet Industry Daily.
 
 'on':
   workflow_dispatch:
