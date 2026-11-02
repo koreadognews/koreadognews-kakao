@@ -155,7 +155,8 @@ def main():
     print(f'Generated {path}: {len(articles)} items; landing URL: {link}')
     if args.send:
         link = f"{os.environ['PUBLIC_BASE_URL'].rstrip('/')}/{date}.html"
-        send_kakao(message, link)
+        print("KAKAO_LINK_URL:", link, flush=True)
+        send_kakao(message,link)
         print('Kakao API reported successful send')
     else:
         print('DRY RUN: no Kakao message sent')
