@@ -30,6 +30,22 @@ jobs:
           GH_TOKEN: ''
           GITHUB_TOKEN: ''
         run: python -m unittest discover -s tests -p 'test_*.py' -v
+        
+      - name: OpenAI connection check
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python - <<'PY'
+          from openai import OpenAI
+
+          client = OpenAI(timeout=30.0, max_retries=0)
+          response = client.responses.create(
+              model="gpt-5-mini",
+              input="Reply with OK only."
+          )
+          print("OPENAI_CONNECTION_OK")
+          PY
       - name: Live newsletter dry run
         if: github.event_name == 'workflow_dispatch'
         env:
