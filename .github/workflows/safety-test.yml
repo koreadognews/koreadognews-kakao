@@ -23,6 +23,30 @@ jobs:
       - name: Check syntax
         run: python -m py_compile bot.py send_once.py sync_kakao_token.py tests/test_safety.py tests/test_unified.py
       - name: Offline safety tests
+      
+      - name: Live newsletter dry run
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+          OPENAI_MODEL: gpt-5-mini
+        run: |
+          python bot.py
+          python - <<'PY'
+          from datetime import datetime
+          from pathlib import Path
+          from zoneinfo import ZoneInfo
+          import json
+
+          day = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+          folder = Path("docs/issues")
+          data = json.loads((folder / f"{day}.json").read_text(encoding="utf-8"))
+          text = (folder / f"{day}.txt").read_text(encoding="utf-8")
+          assert data["issue_date"] == day
+          assert data["text"] == text
+          print("PASS: canonical JSON and TXT match")
+          PY
+
         env:
           OPENAI_API_KEY: ''
           KAKAO_REST_API_KEY: ''
