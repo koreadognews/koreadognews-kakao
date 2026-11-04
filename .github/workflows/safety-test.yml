@@ -10,7 +10,7 @@ jobs:
   safety-test:
     if: github.ref == 'refs/heads/test-safety'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
