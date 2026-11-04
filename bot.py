@@ -208,11 +208,22 @@ def create_issue(issue, candidates=None):
     if candidates is None:
         from research_split import fetch_research_split
         candidates = fetch_research_split(issue, start, end)
+    logging.warning(
+        "Research candidates: domestic=%d, supplement=%d, overseas=%d, events=%d",
+        len(candidates.get("domestic_industry", [])),
+        len(candidates.get("domestic_supplement", [])),
+        len(candidates.get("overseas", [])),
+        len(candidates.get("events", [])),
+    )
     seen, accepted = set(), []
     domestic = validate_news(candidates.get('domestic_industry', []), start, end, 15, seen, accepted, korean=True, category='domestic_industry')
     supplement = validate_news(candidates.get('domestic_supplement', []), start, end, 15-len(domestic), seen, accepted, korean=True, category='domestic_supplement')
     overseas = validate_news(candidates.get('overseas', []), start, end, 5, seen, accepted, category='overseas')
     events = validate_events(candidates.get('events', []), issue)
+     logging.warning(
+        "Verified results: domestic=%d, supplement=%d, overseas=%d, events=%d",
+        len(domestic), len(supplement), len(overseas), len(events)
+    )
     if not (domestic or supplement or overseas):
         raise RuntimeError('No news with verified first publication time; no edition sent')
     return {'schema_version': 1, 'issue_date':issue.isoformat(), 'collection_start':start.isoformat(),
