@@ -1,0 +1,4 @@
+{
+  "feeds": [],
+  "instructions": "Add verified first-party HTTPS RSS/Atom feeds. Example object: {\"publisher\":\"Original publisher name\",\"category\":\"domestic\",\"url\":\"https://VERIFIED_FEED_URL\",\"hosts\":[\"original-publisher.example\"],\"enabled\":true}. The hosts must exactly match article-link hostnames. No feed URL is prefilled without verification."
+}
