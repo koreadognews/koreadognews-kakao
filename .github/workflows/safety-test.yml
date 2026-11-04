@@ -23,7 +23,13 @@ jobs:
       - name: Check syntax
         run: python -m py_compile bot.py send_once.py sync_kakao_token.py tests/test_safety.py tests/test_unified.py
       - name: Offline safety tests
-      
+        env:
+          OPENAI_API_KEY: ''
+          KAKAO_REST_API_KEY: ''
+          KAKAO_REFRESH_TOKEN: ''
+          GH_TOKEN: ''
+          GITHUB_TOKEN: ''
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
       - name: Live newsletter dry run
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -46,11 +52,3 @@ jobs:
           assert data["text"] == text
           print("PASS: canonical JSON and TXT match")
           PY
-
-        env:
-          OPENAI_API_KEY: ''
-          KAKAO_REST_API_KEY: ''
-          KAKAO_REFRESH_TOKEN: ''
-          GH_TOKEN: ''
-          GITHUB_TOKEN: ''
-        run: python -m unittest discover -s tests -p 'test_*.py' -v
