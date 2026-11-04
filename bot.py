@@ -205,9 +205,9 @@ def validate_events(candidates, issue):
 
 def create_issue(issue, candidates=None):
     start, end = bounds(issue)
-    if candidates is None:
-        from research_split import fetch_research_split
-        candidates = fetch_research_split(issue, start, end)
+    if candidates is None:        
+        from feed_collector import fetch_candidates
+        candidates = fetch_candidates(issue, start, end)
     logging.warning(
         "Research candidates: domestic=%d, supplement=%d, overseas=%d, events=%d",
         len(candidates.get("domestic_industry", [])),
