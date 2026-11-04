@@ -50,7 +50,11 @@ class TestOpenAIRetry(unittest.TestCase):
         self.assertEqual(bot.fetch_research(self.date), {'articles': []})
         self.assertEqual(self.create.call_count, 1)
         self.sleep.assert_not_called()
-        self.openai.OpenAI.assert_called_once_with(max_retries=0)
+        self.openai.OpenAI.assert_called_once_with(
+            max_retries=0,
+            timeout=120.0
+        )
+
 
     def test_one_temporary_failure(self):
         self.create.side_effect = [APIConnectionError('network'), self.success]
