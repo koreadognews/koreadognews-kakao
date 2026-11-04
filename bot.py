@@ -221,8 +221,8 @@ def create_issue(issue, candidates=None):
     overseas = validate_news(candidates.get('overseas', []), start, end, 5, seen, accepted, category='overseas')
     events = validate_events(candidates.get('events', []), issue)
      logging.warning(
-        "Verified results: domestic=%d, supplement=%d, overseas=%d, events=%d",
-        len(domestic), len(supplement), len(overseas), len(events)
+         "Verified results: domestic=%d, supplement=%d, overseas=%d, events=%d",
+         len(domestic), len(supplement), len(overseas), len(events)
     )
     if not (domestic or supplement or overseas):
         raise RuntimeError('No news with verified first publication time; no edition sent')
