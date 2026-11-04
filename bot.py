@@ -206,7 +206,8 @@ def validate_events(candidates, issue):
 def create_issue(issue, candidates=None):
     start, end = bounds(issue)
     if candidates is None:
-        candidates = fetch_research(issue, start, end)
+        from research_split import fetch_research_split
+        candidates = fetch_research_split(issue, start, end)
     seen, accepted = set(), []
     domestic = validate_news(candidates.get('domestic_industry', []), start, end, 15, seen, accepted, korean=True, category='domestic_industry')
     supplement = validate_news(candidates.get('domestic_supplement', []), start, end, 15-len(domestic), seen, accepted, korean=True, category='domestic_supplement')
