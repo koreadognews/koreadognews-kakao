@@ -50,7 +50,10 @@ def fetch_research(issue, start=None, end=None):
     if start is None or end is None:
         start, end = bounds(issue)
     from openai import OpenAI, APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
-    client = OpenAI(max_retries=0)
+client = OpenAI(
+    max_retries=0,
+    timeout=120.0
+)
     prompt = f'''Prepare candidate items for Korea Dog News industry digest dated {issue.isoformat()}.
 First publication interval [inclusive start, exclusive end] in Asia/Seoul:
 {start.isoformat()} to {end.isoformat()}.
