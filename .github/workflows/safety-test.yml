@@ -19,9 +19,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt     
       - name: Check syntax
-        run: python -m py_compile bot.py send_once.py sync_kakao_token.py tests/test_safety.py tests/test_unified.py
+        run: python -m py_compile bot.py send_once.py sync_kakao_token.py feed_collector.py tests/test_safety.py tests/test_unified.py tests/test_split.py tests/test_feed_collector.py
       - name: Offline safety tests
         env:
           OPENAI_API_KEY: ''
