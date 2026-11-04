@@ -48,7 +48,8 @@ jobs:
       - name: Archive canonical source and published pages
         if: github.ref == 'refs/heads/main'
         shell: bash
-
+        run: |
+        if: github.ref == 'refs/heads/main'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
