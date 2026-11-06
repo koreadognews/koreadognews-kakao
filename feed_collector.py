@@ -143,9 +143,10 @@ def fetch_candidates(issue, start=None, end=None, *, config_path=None, get=None)
                 max(valid_dates).isoformat() if valid_dates else "none",
                 min(valid_dates).isoformat() if valid_dates else "none",
                 urlparse(sample_url).hostname or "none",
-                urlparse(sample_url).scheme or "none"
+                urlparse(sample_url).scheme or "none"          
             )
-                for category, entry in items:
+            items = parse_feed(response.content, feed, start, end)
+            for category, entry in items:
                 candidates[category].append(entry)
             successes += 1
             logging.info('Feed %s: %d candidates', feed['publisher'], len(items))
