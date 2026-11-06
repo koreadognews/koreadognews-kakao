@@ -1,4 +1,3 @@
-
 {
   "feeds": [
     {
@@ -18,6 +17,75 @@
       "hosts": [
         "www.newswire.co.kr",
         "newswire.co.kr"
+      ],
+      "enabled": true
+    },
+    {
+      "publisher": "농림축산식품부 보도자료",
+      "category": "domestic",
+      "url": "https://www.mafra.go.kr/bbs/home/792/rssList.do?row=50",
+      "hosts": [
+        "www.mafra.go.kr",
+        "mafra.go.kr"
+      ],
+      "enabled": true
+    },
+    {
+      "publisher": "중소벤처기업부 보도자료",
+      "category": "domestic",
+      "url": "https://mss.go.kr/rss/smba/board/86.do",
+      "hosts": [
+        "www.mss.go.kr",
+        "mss.go.kr"
+      ],
+      "enabled": true
+    },
+    {
+      "publisher": "행정안전부 보도자료",
+      "category": "domestic",
+      "url": "https://www.mois.go.kr/gpms/view/jsp/rss/rss.jsp?ctxCd=1012",
+      "hosts": [
+        "www.mois.go.kr",
+        "mois.go.kr"
+      ],
+      "enabled": true
+    },
+    {
+      "publisher": "서울시 내 손안에 서울",
+      "category": "domestic",
+      "url": "https://mediahub.seoul.go.kr/news/rss/",
+      "hosts": [
+        "mediahub.seoul.go.kr"
+      ],
+      "enabled": true
+    },
+    {
+      "publisher": "Pet Age",
+      "category": "overseas",
+      "url": "https://www.petage.com/feed/",
+      "hosts": [
+        "www.petage.com",
+        "petage.com"
+      ],
+      "enabled": true
+    },
+    {
+      "publisher": "Pet Food Processing 제조",
+      "category": "overseas",
+      "url": "https://www.petfoodprocessing.net/rss/topic/98-manufacturers",
+      "hosts": [
+        "www.petfoodprocessing.net",
+        "petfoodprocessing.net"
+      ],
+      "enabled": true
+    },
+    {
+      "publisher": "Pet Food Processing 해외",
+      "category": "overseas",
+      "url": "https://www.petfoodprocessing.net/rss/topic/497-global-news",
+      "hosts": [
+        "www.petfoodprocessing.net",
+        "petfoodprocessing.net"
       ],
       "enabled": true
     }
