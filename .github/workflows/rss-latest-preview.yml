@@ -1,0 +1,137 @@
+name: Korean Pet Industry - Latest Archived Newsletter Preview (Test Only)
+
+'on':
+  push:
+    branches: [test-safety]
+    paths:
+      - '.github/workflows/rss-latest-preview.yml'
+  workflow_dispatch:
+    inputs:
+      issue_date:
+        description: 'Optional completed edition date, YYYY-MM-DD (KST); blank = latest closed 06:00 edition'
+        required: false
+        type: string
+
+# READ ONLY: never calls Kakao, OpenAI, production publishing or GitHub push.
+permissions:
+  contents: read
+
+jobs:
+  build-read-only-draft:
+    if: github.ref == 'refs/heads/test-safety'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Read test-safety without write credentials
+        uses: actions/checkout@v4
+        with:
+          ref: test-safety
+          persist-credentials: false
+
+      - name: Install Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install read-only validation dependencies
+        run: python -m pip install 'requests>=2.32,<3'
+
+      - name: Offline archive safety tests
+        run: |
+          python -m py_compile bot.py feed_collector.py rss_archive.py
+          python rss_archive.py --selftest
+
+      - name: Read archived candidates, verify publishers and build draft
+        env:
+          REQUESTED_ISSUE_DATE: ${{ inputs.issue_date }}
+          OPENAI_API_KEY: ''
+          KAKAO_REST_API_KEY: ''
+          KAKAO_REFRESH_TOKEN: ''
+          KAKAO_CLIENT_SECRET: ''
+          GH_TOKEN: ''
+          GITHUB_TOKEN: ''
+        run: |
+          python - <<'PY'
+          import datetime as dt
+          import json
+          import os
+          from pathlib import Path
+          from zoneinfo import ZoneInfo
+
+          from rss_archive import load_for_issue
+          from bot import bounds, create_issue, render_text
+
+          TZ = ZoneInfo('Asia/Seoul')
+          now = dt.datetime.now(TZ)
+          latest_closed = now.date() if now.time() >= dt.time(6, 0) else now.date() - dt.timedelta(days=1)
+          requested = os.environ.get('REQUESTED_ISSUE_DATE', '').strip()
+          issue = dt.date.fromisoformat(requested) if requested else latest_closed
+          if issue > latest_closed:
+              raise ValueError('Cannot preview an edition before its 06:00 KST cutoff')
+          start, end = bounds(issue)
+          output = Path('preview-output')
+          output.mkdir(exist_ok=True)
+          print('LATEST_PREVIEW_KST now={} latest_closed_issue={} selected_issue={}'.format(
+              now.isoformat(), latest_closed, issue), flush=True)
+          print('LATEST_PREVIEW_WINDOW start={} end_exclusive={}'.format(start.isoformat(), end.isoformat()), flush=True)
+
+          candidates = load_for_issue(issue)
+          categories = ('domestic_industry', 'domestic_supplement', 'overseas')
+          counts = {k: len(candidates.get(k, [])) for k in categories}
+          print('LATEST_PREVIEW_CANDIDATES ' + json.dumps(counts, ensure_ascii=False), flush=True)
+
+          report = {
+              'mode': 'TEST_ONLY_NO_KAKAO_NO_OPENAI',
+              'issue_date': issue.isoformat(),
+              'collection_start': start.isoformat(),
+              'collection_end_exclusive': end.isoformat(),
+              'candidate_counts': counts,
+              'editorial_targets': {'domestic': 15, 'overseas': 5},
+              'events_status': 'NOT_IMPLEMENTED__NO_EVENTS_DISCOVERY_PERFORMED',
+              'published': False,
+              'sent_to_kakao': False,
+          }
+          if not any(counts.values()):
+              report['status'] = 'NO_ARCHIVED_CANDIDATES'
+              (output / 'coverage-report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
+              print('LATEST_PREVIEW_EMPTY: no matching saved article candidates; draft not created', flush=True)
+          else:
+              try:
+                  # Explicit candidates bypasses live RSS search and OpenAI;
+                  # bot.create_issue still verifies source timestamps and filters.
+                  verified = create_issue(issue, candidates=candidates)
+              except RuntimeError as exc:
+                  report['status'] = 'NO_PUBLISHER_VERIFIED_NEWS'
+                  report['error'] = str(exc)
+                  print('LATEST_PREVIEW_UNVERIFIED: ' + str(exc), flush=True)
+              else:
+                  domestic = len(verified['domestic_industry']) + len(verified['domestic_supplement'])
+                  overseas = len(verified['overseas'])
+                  report['verified_counts'] = {'domestic': domestic, 'overseas': overseas, 'events': 0}
+                  report['shortfalls'] = {'domestic': max(0, 15 - domestic), 'overseas': max(0, 5 - overseas)}
+                  report['status'] = 'DRAFT_INCOMPLETE' if domestic < 15 or overseas < 5 else 'DRAFT_NEEDS_EDITOR_REVIEW'
+                  # No web/news search for events has been performed; do not claim
+                  # that no pet exhibitions are taking place next month.
+                  notice = ('시험용 초안 / 발송 금지 / 기사 수 부족 가능\n'
+                            '주의: 행사 일정은 아직 자동 조사하지 않았습니다. 소식지의 "확인된 행사 없음"은 일정 부재를 의미하지 않습니다.\n'
+                            '발행 전 담당 편집자의 기사 내용, 기사 제목, 산업 관련성 검토가 필요합니다.\n\n')
+                  draft = notice + render_text(verified)
+                  (output / 'newsletter-preview.txt').write_text(draft, encoding='utf-8')
+                  (output / 'newsletter-preview.json').write_text(
+                      json.dumps(verified, ensure_ascii=False, indent=2) + '\n', encoding='utf-8'
+                  )
+                  print('LATEST_PREVIEW_VERIFIED domestic={} overseas={} events=0'.format(domestic, overseas), flush=True)
+                  print('LATEST_PREVIEW_STATUS ' + report['status'], flush=True)
+              (output / 'coverage-report.json').write_text(
+                  json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8'
+              )
+          print('LATEST_PREVIEW_COMPLETE no_send=true no_openai=true no_production_changes=true', flush=True)
+          PY
+
+      - name: Downloadable preview and coverage report (not a published issue)
+        uses: actions/upload-artifact@v4
+        with:
+          name: rss-latest-newsletter-test-draft
+          path: preview-output/
+          if-no-files-found: error
+          retention-days: 7
