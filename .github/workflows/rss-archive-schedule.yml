@@ -1,0 +1,71 @@
+name: Korean Pet Industry RSS Archive - Scheduled Collector
+
+# Only this workflow file needs to be placed on the default branch (main).
+# The job checks out, reads and writes the test-safety branch only.
+# NO Kakao sends, NO OpenAI calls, NO edits to daily.yml or main content.
+on:
+  schedule:
+    # GitHub cron is UTC by default. Every 2 hours at HH:50 UTC = odd hours :50 KST.
+    # Includes 05:50 KST, useful ahead of the 06:00 newsletter cutoff.
+    - cron: '50 */2 * * *'
+    # Additional run at 06:05 KST to capture the last 10 minutes before 06:00.
+    - cron: '5 21 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  # Same group as the already-tested archive-pilot workflow.
+  group: rss-archive-pilot-test-safety
+  cancel-in-progress: false
+
+jobs:
+  collect-to-test-branch:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout only test-safety branch
+        uses: actions/checkout@v4
+        with:
+          ref: test-safety
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Safety tests (offline)
+        run: |
+          python -m py_compile rss_archive.py feed_collector.py
+          python rss_archive.py --selftest
+
+      - name: Collect article candidates from RSS (no AI and no Kakao)
+        run: python rss_archive.py --collect
+
+      - name: Save new archive files to test-safety ONLY
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -d data/rss_archive ]; then
+            echo 'ARCHIVE_STATUS: No new matching candidates in current RSS feeds.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/rss_archive/
+          if git diff --cached --quiet; then
+            echo 'ARCHIVE_STATUS: No new articles (all already stored).'
+            exit 0
+          fi
+          git commit -m 'Archive RSS candidates [skip ci]'
+          # Keep unrelated recent test-safety changes. Never force push.
+          git pull --rebase origin test-safety
+          git push origin HEAD:test-safety
+          echo 'ARCHIVE_STATUS: Saved new RSS candidates to test-safety.'
