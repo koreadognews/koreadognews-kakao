@@ -4,119 +4,202 @@
       "publisher": "뉴스와이어 반려동물",
       "category": "domestic",
       "url": "https://api.newswire.co.kr/rss/industry/908",
-      "hosts": ["www.newswire.co.kr", "newswire.co.kr"],
+      "hosts": [
+        "www.newswire.co.kr",
+        "newswire.co.kr"
+      ],
       "enabled": true
     },
     {
       "publisher": "뉴스와이어 전체",
       "category": "domestic",
       "url": "https://api.newswire.co.kr/rss/all",
-      "hosts": ["www.newswire.co.kr", "newswire.co.kr"],
+      "hosts": [
+        "www.newswire.co.kr",
+        "newswire.co.kr"
+      ],
       "enabled": true
     },
     {
       "publisher": "농림축산식품부 보도자료",
       "category": "domestic",
       "url": "https://www.mafra.go.kr/bbs/home/792/rssList.do?row=50",
-      "hosts": ["www.mafra.go.kr", "mafra.go.kr"],
+      "hosts": [
+        "www.mafra.go.kr",
+        "mafra.go.kr"
+      ],
       "enabled": true
     },
     {
       "publisher": "중소벤처기업부 보도자료",
       "category": "domestic",
       "url": "https://mss.go.kr/rss/smba/board/86.do",
-      "hosts": ["www.mss.go.kr", "mss.go.kr"],
+      "hosts": [
+        "www.mss.go.kr",
+        "mss.go.kr"
+      ],
       "enabled": true
     },
     {
       "publisher": "행정안전부 보도자료",
       "category": "domestic",
       "url": "https://www.mois.go.kr/gpms/view/jsp/rss/rss.jsp?ctxCd=1012",
-      "hosts": ["www.mois.go.kr", "mois.go.kr"],
+      "hosts": [
+        "www.mois.go.kr",
+        "mois.go.kr"
+      ],
       "enabled": true
     },
     {
       "publisher": "서울시 내 손안에 서울",
       "category": "domestic",
       "url": "https://mediahub.seoul.go.kr/news/rss/",
-      "hosts": ["mediahub.seoul.go.kr"],
+      "hosts": [
+        "mediahub.seoul.go.kr"
+      ],
       "enabled": true
     },
     {
       "publisher": "Pet Age",
       "category": "overseas",
       "url": "https://www.petage.com/feed/",
-      "hosts": ["www.petage.com", "petage.com"],
+      "hosts": [
+        "www.petage.com",
+        "petage.com"
+      ],
       "enabled": true
     },
     {
       "publisher": "Pet Food Processing 제조",
       "category": "overseas",
       "url": "https://www.petfoodprocessing.net/rss/topic/98-manufacturers",
-      "hosts": ["www.petfoodprocessing.net", "petfoodprocessing.net"],
+      "hosts": [
+        "www.petfoodprocessing.net",
+        "petfoodprocessing.net"
+      ],
       "enabled": true
     },
     {
       "publisher": "Pet Food Processing 해외",
       "category": "overseas",
       "url": "https://www.petfoodprocessing.net/rss/topic/497-global-news",
-      "hosts": ["www.petfoodprocessing.net", "petfoodprocessing.net"],
+      "hosts": [
+        "www.petfoodprocessing.net",
+        "petfoodprocessing.net"
+      ],
       "enabled": true
     },
     {
       "publisher": "뉴시스 산업",
       "category": "domestic",
       "url": "https://www.newsis.com/RSS/industry.xml",
-      "hosts": ["www.newsis.com", "newsis.com", "nwww.newsis.com"],
+      "hosts": [
+        "www.newsis.com",
+        "newsis.com",
+        "nwww.newsis.com"
+      ],
       "enabled": true
     },
     {
       "publisher": "뉴시스 경제",
       "category": "domestic",
       "url": "https://www.newsis.com/RSS/economy.xml",
-      "hosts": ["www.newsis.com", "newsis.com", "nwww.newsis.com"],
+      "hosts": [
+        "www.newsis.com",
+        "newsis.com",
+        "nwww.newsis.com"
+      ],
       "enabled": true
     },
     {
       "publisher": "뉴시스 지방",
       "category": "domestic",
       "url": "https://www.newsis.com/RSS/country.xml",
-      "hosts": ["www.newsis.com", "newsis.com", "nwww.newsis.com"],
+      "hosts": [
+        "www.newsis.com",
+        "newsis.com",
+        "nwww.newsis.com"
+      ],
       "enabled": true
     },
     {
       "publisher": "한국경제 경제",
       "category": "domestic",
       "url": "https://www.hankyung.com/feed/economy",
-      "hosts": ["www.hankyung.com", "hankyung.com"],
+      "hosts": [
+        "www.hankyung.com",
+        "hankyung.com"
+      ],
       "enabled": true
     },
     {
       "publisher": "한국경제 생활",
       "category": "domestic",
       "url": "https://www.hankyung.com/feed/life",
-      "hosts": ["www.hankyung.com", "hankyung.com"],
+      "hosts": [
+        "www.hankyung.com",
+        "hankyung.com"
+      ],
       "enabled": true
     },
     {
       "publisher": "매일경제 기업·경영",
       "category": "domestic",
       "url": "https://www.mk.co.kr/rss/50100032/",
-      "hosts": ["www.mk.co.kr", "mk.co.kr"],
+      "hosts": [
+        "www.mk.co.kr",
+        "mk.co.kr"
+      ],
       "enabled": true
     },
     {
       "publisher": "매일경제 경제",
       "category": "domestic",
       "url": "https://www.mk.co.kr/rss/30100041/",
-      "hosts": ["www.mk.co.kr", "mk.co.kr"],
+      "hosts": [
+        "www.mk.co.kr",
+        "mk.co.kr"
+      ],
       "enabled": true
     },
     {
       "publisher": "파이낸셜뉴스 산업",
       "category": "domestic",
       "url": "https://www.fnnews.com/rss/r20/fn_realnews_industry.xml",
-      "hosts": ["www.fnnews.com", "fnnews.com"],
+      "hosts": [
+        "www.fnnews.com",
+        "fnnews.com"
+      ],
+      "enabled": true
+    },
+    {
+      "publisher": "뉴시스 문화 추가시험",
+      "category": "domestic",
+      "url": "https://www.newsis.com/RSS/culture.xml",
+      "hosts": [
+        "www.newsis.com",
+        "newsis.com",
+        "nwww.newsis.com"
+      ],
+      "enabled": true
+    },
+    {
+      "publisher": "한국경제 전체 추가시험",
+      "category": "domestic",
+      "url": "https://www.hankyung.com/feed/all-news",
+      "hosts": [
+        "www.hankyung.com",
+        "hankyung.com"
+      ],
+      "enabled": true
+    },
+    {
+      "publisher": "헤럴드경제 전체 추가시험",
+      "category": "domestic",
+      "url": "https://biz.heraldcorp.com/rss/google/newsAll",
+      "hosts": [
+        "biz.heraldcorp.com"
+      ],
       "enabled": true
     }
   ]
