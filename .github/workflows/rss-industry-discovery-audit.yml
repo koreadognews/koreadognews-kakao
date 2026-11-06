@@ -1,0 +1,294 @@
+name: Korean Pet Industry - Expand Domestic Industry Discovery (Read Only)
+'on':
+  push:
+    branches: [test-safety]
+    paths:
+      - '.github/workflows/rss-industry-discovery-audit.yml'
+  workflow_dispatch:
+
+# Strictly diagnostic: no publishing, no commits, no Kakao, no OpenAI, no BigKinds.
+# Do not edit production/main, feeds.json or archived articles.
+permissions:
+  contents: read
+
+jobs:
+  domestic-industry-discovery-audit:
+    if: github.ref == 'refs/heads/test-safety'
+    runs-on: ubuntu-latest
+    timeout-minutes: 16
+    steps:
+      - name: Checkout test branch without write credentials
+        uses: actions/checkout@v4
+        with:
+          ref: test-safety
+          persist-credentials: false
+      - name: Use Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install requests for RSS and optional official news search
+        run: python -m pip install 'requests>=2.32,<3'
+      - name: Existing offline safety and editorial regression tests
+        env:
+          OPENAI_API_KEY: ''
+          KAKAO_REST_API_KEY: ''
+          KAKAO_REFRESH_TOKEN: ''
+        run: |
+          python -m py_compile feed_collector.py rss_archive.py bot.py
+          python rss_archive.py --selftest
+          python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Compare first-party publisher feeds and optional NAVER Search API (diagnosis only)
+        env:
+          OPENAI_API_KEY: ''
+          KAKAO_REST_API_KEY: ''
+          KAKAO_REFRESH_TOKEN: ''
+          KAKAO_CLIENT_SECRET: ''
+          GH_TOKEN: ''
+          GITHUB_TOKEN: ''
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+        run: |
+          python - <<'PY'
+          import collections
+          import concurrent.futures
+          import datetime as dt
+          import email.utils
+          import html
+          import json
+          import os
+          import re
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          from urllib.parse import urlsplit
+          from zoneinfo import ZoneInfo
+
+          import requests
+          import bot
+          import feed_collector as fc
+          from rss_archive import load_for_issue
+
+          TZ = ZoneInfo('Asia/Seoul')
+          now = dt.datetime.now(TZ)
+          latest_closed = now.date() if now.time() >= dt.time(6) else now.date() - dt.timedelta(days=1)
+          issue_start, issue_end = bot.bounds(latest_closed)
+          eight_days_start = now - dt.timedelta(days=8)
+          eight_days_end = now + dt.timedelta(minutes=2)
+          root = Path('industry-discovery-audit')
+          root.mkdir(exist_ok=True)
+          baseline = json.loads(Path('feeds.json').read_text(encoding='utf-8'))['feeds']
+          assert len(baseline) == 20, 'Expected existing 20 discovery RSS feeds, abort safely'
+
+          # Each extra feed is in an official publisher RSS directory.
+          # No new source is enabled in feeds.json by this workflow.
+          extra = [
+              {'publisher':'경향신문 경제 조사', 'url':'https://www.khan.co.kr/rss/rssdata/economy_news.xml', 'hosts':['www.khan.co.kr','khan.co.kr']},
+              {'publisher':'경향신문 지역 조사', 'url':'https://www.khan.co.kr/rss/rssdata/local_news.xml', 'hosts':['www.khan.co.kr','khan.co.kr']},
+              {'publisher':'경향신문 사회 조사', 'url':'https://www.khan.co.kr/rss/rssdata/society_news.xml', 'hosts':['www.khan.co.kr','khan.co.kr']},
+              {'publisher':'매일경제 전체 조사', 'url':'https://www.mk.co.kr/rss/40300001/', 'hosts':['www.mk.co.kr','mk.co.kr']},
+              {'publisher':'매일경제 헤드라인 조사', 'url':'https://www.mk.co.kr/rss/30000001/', 'hosts':['www.mk.co.kr','mk.co.kr']},
+              {'publisher':'뉴시스 IT·바이오 조사', 'url':'https://www.newsis.com/RSS/health.xml', 'hosts':['www.newsis.com','newsis.com','nwww.newsis.com']},
+              {'publisher':'중기부 사업공고 조사', 'url':'https://mss.go.kr/rss/smba/board/310.do', 'hosts':['mss.go.kr','www.mss.go.kr']},
+              {'publisher':'국가통계포털 최근자료 조사', 'url':'https://kosis.kr/rss/themes_rss.jsp', 'hosts':['kosis.kr','www.kosis.kr']},
+          ]
+          extra = [{**f,'category':'domestic','enabled':True} for f in extra]
+          selected = baseline + extra
+          by_source = []
+          base_items, extra_items = {}, {}
+          errors = []
+          rejected = collections.Counter()
+
+          def canonical(url):
+              p = urlsplit(url)
+              return ((p.hostname or '').lower().removeprefix('www.'), p.path.rstrip('/'), p.query)
+
+          def inspect_feed(feed):
+              response = requests.get(feed['url'], timeout=14,
+                  headers={'User-Agent':'KoreaDogNewsEditorialDiscovery/1.0'})
+              response.raise_for_status()
+              nodes = [n for n in ET.fromstring(response.content).iter()
+                       if n.tag.rsplit('}',1)[-1] in ('item','entry')]
+              parsed = fc.parse_feed(response.content, feed, eight_days_start, eight_days_end)
+              issues = fc.parse_feed(response.content, feed, issue_start, issue_end)
+              return {'publisher':feed['publisher'], 'url':feed['url'],
+                      'rss_rows':len(nodes), 'candidates_8days':parsed,
+                      'candidates_issue':issues}
+
+          # Limited concurrency limits load on first-party publisher websites.
+          with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+              tasks = {pool.submit(inspect_feed, feed): (index,feed)
+                       for index,feed in enumerate(selected) if feed.get('enabled',True)}
+              for task in concurrent.futures.as_completed(tasks):
+                  index, feed = tasks[task]
+                  try:
+                      result = task.result()
+                      current = base_items if index < len(baseline) else extra_items
+                      for _, item in result['candidates_8days']:
+                          current.setdefault(canonical(item['url']), item)
+                      info = {'publisher':feed['publisher'],
+                              'group':'existing' if index < len(baseline) else 'proposed',
+                              'status':'ok', 'rss_rows':result['rss_rows'],
+                              'pet_candidates_8days':len(result['candidates_8days']),
+                              'pet_candidates_latest_closed_issue':len(result['candidates_issue']),
+                              'industry_candidates_8days':sum(c=='domestic_industry' for c,_ in result['candidates_8days'])}
+                  except (requests.RequestException, ET.ParseError, KeyError, ValueError, TypeError) as exc:
+                      info = {'publisher':feed['publisher'],
+                              'group':'existing' if index < len(baseline) else 'proposed',
+                              'status':'error', 'error_type':type(exc).__name__}
+                      errors.append(feed['publisher'])
+                  by_source.append(info)
+                  print('INDUSTRY_RSS_SOURCE '+json.dumps(info,ensure_ascii=False),flush=True)
+
+          # The NAVER Search API is optional and never silently requires credentials.
+          # API pubDate is NOT an original publisher first-publication timestamp.
+          queries = [
+              '반려동물 산업', '펫푸드', '펫테크', '반려동물 수출',
+              '반려동물 용품', '반려동물 기업', '펫보험', '반려동물 시장',
+              '애견호텔', '펫산업'
+          ]
+          naver_state = 'NOT_CONFIGURED'
+          naver_items = {}
+          naver_counts = []
+          forbidden_hosts = {
+              'news.naver.com', 'n.news.naver.com', 'm.news.naver.com',
+              'news.google.com', 'www.google.com', 'blog.naver.com',
+              'cafe.naver.com', 'm.blog.naver.com', 'www.youtube.com'
+          }
+          client_id = os.environ.get('NAVER_CLIENT_ID','').strip()
+          client_secret = os.environ.get('NAVER_CLIENT_SECRET','').strip()
+          if client_id and client_secret:
+              naver_state = 'TESTED'
+              headers = {'X-Naver-Client-Id':client_id,
+                         'X-Naver-Client-Secret':client_secret,
+                         'User-Agent':'KoreaDogNewsEditorialDiscovery/1.0'}
+              for query in queries:
+                  try:
+                      response = requests.get('https://openapi.naver.com/v1/search/news.json',
+                          params={'query':query,'display':100,'start':1,'sort':'date'},
+                          headers=headers, timeout=16)
+                      response.raise_for_status()
+                      payload = response.json()
+                      rows = payload.get('items', [])
+                      accepted_this_query = 0
+                      for raw in rows:
+                          link = html.unescape(raw.get('originallink','')).strip()
+                          domain = (urlsplit(link).hostname or '').lower()
+                          if urlsplit(link).scheme != 'https' or not domain or domain in forbidden_hosts:
+                              rejected['not_direct_https_publisher'] += 1
+                              continue
+                          try:
+                              submitted = email.utils.parsedate_to_datetime(raw.get('pubDate',''))
+                          except (ValueError, IndexError, TypeError):
+                              rejected['invalid_candidate_date'] += 1
+                              continue
+                          if submitted.tzinfo is None or submitted.utcoffset() is None:
+                              rejected['missing_timezone'] += 1
+                              continue
+                          submitted = submitted.astimezone(TZ)
+                          if not eight_days_start <= submitted < eight_days_end:
+                              rejected['outside_8days'] += 1
+                              continue
+                          title = fc._clean(raw.get('title',''))
+                          summary = fc._clean(raw.get('description',''))
+                          section = fc.classify_domestic(title,summary,'네이버 검색 후보')
+                          if section is None:
+                              rejected['not_pet_editorial_match'] += 1
+                              continue
+                          key = canonical(link)
+                          if key not in naver_items:
+                              naver_items[key] = {'title':title,'summary':summary[:400],
+                                  'url':link,'publisher':domain,
+                                  'published_at':submitted.isoformat(),
+                                  'category':section,'search_query':query,
+                                  'verification':'UNVERIFIED_NAVER_SEARCH_CANDIDATE'}
+                          accepted_this_query += 1
+                      naver_counts.append({'query':query,'returned':len(rows),
+                                           'editorial_hits':accepted_this_query})
+                      print('INDUSTRY_NAVER_QUERY '+json.dumps(naver_counts[-1],ensure_ascii=False),flush=True)
+                  except (requests.RequestException,ValueError,TypeError,KeyError) as exc:
+                      naver_state = 'PARTIAL_ERROR'
+                      naver_counts.append({'query':query,'error_type':type(exc).__name__})
+                      print('INDUSTRY_NAVER_ERROR '+json.dumps(naver_counts[-1],ensure_ascii=False),flush=True)
+              del headers, client_secret, client_id
+          elif client_id or client_secret:
+              naver_state = 'MISSING_ONE_CREDENTIAL'
+          print('INDUSTRY_NAVER_STATUS '+naver_state,flush=True)
+
+          all_new = {}
+          for label,items in (('additional_rss',extra_items),('naver_search',naver_items)):
+              for key, item in items.items():
+                  if key in base_items:
+                      rejected['already_in_existing_rss'] += 1
+                  else:
+                      all_new.setdefault(key,{**item,'discovery_method':label})
+          # First-party article pages must independently confirm FIRST publication.
+          # Only a bounded sample is checked here; the rest stay UNVERIFIED.
+          verification = []
+          sample = sorted(all_new.values(),key=lambda a:a['published_at'],reverse=True)[:12]
+          for article in sample:
+              status = 'original_time_not_confirmed'
+              try:
+                  page = bot.get_source(article['url'])
+                  stamps = bot.source_metadata_times(page)
+                  claim = bot.parse_aware_timestamp(article['published_at'])
+                  if claim and any(abs((stamp-claim).total_seconds())<=120 for stamp in stamps):
+                      status = 'original_timestamp_matched'
+              except (requests.RequestException,ValueError,UnicodeError,OSError) as exc:
+                  status = 'original_fetch_failed_'+type(exc).__name__
+              verification.append({'url':article['url'],'title':article['title'],
+                                   'method':article['discovery_method'],
+                                   'candidate_date':article['published_at'],'status':status})
+              print('INDUSTRY_ORIGINAL_VERIFY '+json.dumps(verification[-1],ensure_ascii=False),flush=True)
+
+          archived = load_for_issue(latest_closed)
+          summary = {
+              'mode':'TEST_ONLY_NO_PUBLICATION',
+              'latest_completed_issue':latest_closed.isoformat(),
+              'collection_start':issue_start.isoformat(),
+              'collection_end_exclusive':issue_end.isoformat(),
+              'existing_enabled_rss':sum(bool(f.get('enabled',True)) for f in baseline),
+              'additional_rss_diagnosed':len(extra),
+              'additional_rss_ok':sum(r['status']=='ok' and r['group']=='proposed' for r in by_source),
+              'baseline_unique_pet_candidates_8days':len(base_items),
+              'additional_rss_unique_pet_candidates_8days':len(extra_items),
+              'additional_rss_incremental_urls':len(set(extra_items)-set(base_items)),
+              'naver_state':naver_state,
+              'naver_unique_pet_candidates_8days':len(naver_items),
+              'new_unique_urls_after_deduplication':len(all_new),
+              'verified_original_timestamp_sample':sum(x['status']=='original_timestamp_matched' for x in verification),
+              'original_pages_sampled':len(verification),
+              'current_archive_domestic_industry':len(archived['domestic_industry']),
+              'current_archive_domestic_supplement':len(archived['domestic_supplement']),
+              'usage_rights_review_required':True,
+              'RSS_or_search_result_timestamp_alone_never_verified':True,
+              'bigkinds_used':False,
+              'kakao_sent':False,
+              'openai_called':False,
+              'main_or_production_changed':False
+          }
+          (root/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          (root/'source-comparison.json').write_text(json.dumps(sorted(by_source,key=lambda r:r['publisher']),ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          (root/'optional-search-query-report.json').write_text(json.dumps(naver_counts,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          (root/'publisher-timestamp-check.json').write_text(json.dumps(verification,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          (root/'readme.txt').write_text('\n'.join([
+              '한국애견신문 반려동물산업 소식지 - 뉴스 탐색 확대 비교 (시험만)',
+              f'시험 집계일: {latest_closed}, 기준: {issue_start} 이상 {issue_end} 미만',
+              f"기존 RSS {summary['existing_enabled_rss']}개 / 추가 진단 RSS {len(extra)}개",
+              f"기존 RSS 8일간 후보 {len(base_items)}건 / 추가 RSS 후보 {len(extra_items)}건",
+              f"네이버 뉴스 검색: {naver_state} / 후보 {len(naver_items)}건",
+              f"기존과 신규 중복 제거 후 추가 후보 {len(all_new)}건",
+              f"원문 게시시각 확인: 표본 {len(verification)}건 중 일치 {summary['verified_original_timestamp_sample']}건",
+              '최종 선정 전 원문 게시시각 / 기사 산업 관련성 / 상업적 이용 권한을 검토해야 합니다.',
+              '네이버 뉴스 API 사용에는 NAVER_CLIENT_ID 및 NAVER_CLIENT_SECRET GitHub Secrets가 필요합니다.',
+              '비밀키 값은 어떠한 진단 출력이나 보고서에도 저장하지 않습니다.',
+              '이 시험은 빅카인즈, OpenAI, Kakao를 사용하지 않으며 운영 코드를 바꾸지 않습니다.',
+              '', '원문 전체 본문은 수집하거나 재배포하지 않습니다.'
+          ])+'\n',encoding='utf-8')
+          print('INDUSTRY_DISCOVERY_COMPLETE '+json.dumps(summary,ensure_ascii=False),flush=True)
+          PY
+      - name: Upload diagnostic reports (7-day retention)
+        uses: actions/upload-artifact@v4
+        with:
+          name: korean-pet-industry-discovery-comparison
+          path: industry-discovery-audit/
+          if-no-files-found: error
+          retention-days: 7
