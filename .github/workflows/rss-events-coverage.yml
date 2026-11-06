@@ -1,0 +1,235 @@
+name: Korean Pet Industry - Official Events and RSS Coverage (Test Only)
+'on':
+  push:
+    branches: [test-safety]
+    paths:
+      - '.github/workflows/rss-events-coverage.yml'
+  workflow_dispatch:
+    inputs:
+      issue_date:
+        description: 'Optional completed issue date YYYY-MM-DD (KST). Blank = latest 06:00 cutoff'
+        required: false
+        type: string
+
+# Uses fixed, explicitly approved official source URLs. No BigKinds scraping.
+# Read-only: never publishes, commits, calls OpenAI or sends Kakao.
+permissions:
+  contents: read
+
+jobs:
+  official-events-and-coverage:
+    if: github.ref == 'refs/heads/test-safety'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout test-safety without write credentials
+        uses: actions/checkout@v4
+        with:
+          ref: test-safety
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install requests only
+        run: python -m pip install 'requests>=2.32,<3'
+      - name: Offline archive tests
+        run: |
+          python -m py_compile rss_archive.py feed_collector.py bot.py
+          python rss_archive.py --selftest
+      - name: Inspect RSS and verify three independently listed official events
+        env:
+          REQUESTED_ISSUE_DATE: ${{ inputs.issue_date }}
+          OPENAI_API_KEY: ''
+          KAKAO_REST_API_KEY: ''
+          KAKAO_REFRESH_TOKEN: ''
+          KAKAO_CLIENT_SECRET: ''
+          GH_TOKEN: ''
+          GITHUB_TOKEN: ''
+        run: |
+          python - <<'PY'
+          import collections
+          import datetime as dt
+          import html
+          import json
+          import os
+          import re
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          from urllib.parse import urlparse
+          from zoneinfo import ZoneInfo
+
+          import requests
+          import bot
+          import feed_collector as fc
+          from rss_archive import load_for_issue
+
+          TZ = ZoneInfo('Asia/Seoul')
+          now = dt.datetime.now(TZ)
+          latest_closed = now.date() if now.time() >= dt.time(6) else now.date() - dt.timedelta(days=1)
+          requested = os.getenv('REQUESTED_ISSUE_DATE', '').strip()
+          issue = dt.date.fromisoformat(requested) if requested else latest_closed
+          if issue > latest_closed:
+              raise ValueError('Issue date cannot precede its 06:00 cutoff')
+          window_start, window_end = bot.bounds(issue)
+          folder = Path('preview-output')
+          folder.mkdir(exist_ok=True)
+          print('COVERAGE_ISSUE ' + json.dumps({
+              'issue': str(issue), 'start': window_start.isoformat(),
+              'end_exclusive': window_end.isoformat()
+          }, ensure_ascii=False), flush=True)
+
+          # Feed diagnostics are a current, rolling eight-day RSS SNAPSHOT,
+          # not a claim that every article on the web has been searched.
+          config = json.loads(Path('feeds.json').read_text(encoding='utf-8'))
+          lookback = now - dt.timedelta(days=8)
+          feed_stats = []
+          for feed in config['feeds']:
+              if not feed.get('enabled', True):
+                  continue
+              count = collections.Counter()
+              result = {'publisher': feed['publisher'], 'url': feed['url'],
+                        'category': feed['category'], 'status': 'error'}
+              try:
+                  response = requests.get(feed['url'], timeout=12,
+                                          headers={'User-Agent':'KoreaDogNewsRSSCoverage/1.0'})
+                  response.raise_for_status()
+                  entries = [e for e in ET.fromstring(response.content).iter()
+                             if e.tag.rsplit('}', 1)[-1] in ('item', 'entry')]
+                  for entry in entries:
+                      count['total_items'] += 1
+                      raw = fc._field(entry, {'published','pubDate','date','issued'})
+                      stamp = fc._date(raw, assume_kst=feed['publisher'] in fc.KST_ASSUMED_SOURCES)
+                      if not stamp:
+                          count['unparsed_date'] += 1
+                          continue
+                      if not (lookback <= stamp < now + dt.timedelta(minutes=2)):
+                          count['outside_8day_window'] += 1
+                          continue
+                      count['dated_within_8days'] += 1
+                      link = urlparse(fc._item_link(entry))
+                      if link.scheme != 'https' or (link.hostname or '').lower() not in feed['hosts']:
+                          count['invalid_original_link'] += 1
+                          continue
+                      title = fc._clean(fc._field(entry, {'title'}))
+                      summary = fc._clean(fc._field(entry, {'description','summary','content','encoded'}))
+                      topic = (title + ' ' + summary).lower()
+                      terms = fc.KEYWORDS_KO if feed['category'] == 'domestic' else fc.KEYWORDS_EN
+                      if not title or not any(t in topic for t in terms):
+                          count['no_pet_keyword'] += 1
+                      elif feed['category'] == 'domestic' and any(t in topic for t in fc.BLOCKED_KO):
+                          count['medical_exclusion'] += 1
+                      else:
+                          count['pet_topic_candidate'] += 1
+                  result.update(count)
+                  result['status'] = 'ok'
+              except (requests.RequestException, ValueError, ET.ParseError, KeyError) as exc:
+                  result['error_type'] = type(exc).__name__
+              feed_stats.append(result)
+              print('COVERAGE_FEED ' + json.dumps(result, ensure_ascii=False), flush=True)
+          (folder/'rss-source-coverage.json').write_text(
+              json.dumps({'issue':str(issue),'feed_diagnostics':feed_stats},
+                         ensure_ascii=False,indent=2)+'\n', encoding='utf-8')
+
+          # Fixed known-official/official-government announcement pages.
+          # All dates below are pre-checked against public publisher material;
+          # LIVE HTML is still checked again on every test run.
+          EVENT_SOURCES = (
+              {
+                  'name': '2026 포천 펫스타',
+                  'start_date': '2026-11-14', 'end_date':'2026-11-14',
+                  'url': 'https://www.mcst.go.kr/site/s_culture/festival/festivalView.jsp?pRo=6&pSeq=13352',
+                  'hosts': ('www.mcst.go.kr',),
+                  'title_pattern': r'포천\s*펫스타|포천펫스타',
+                  'date_pattern': r'2026\s*[.]\s*11\s*[.]\s*14',
+              },
+              {
+                  'name': '2026 메가주 일산 시즌2',
+                  'start_date': '2026-11-20', 'end_date':'2026-11-22',
+                  'url': 'https://megazoo.co.kr/show-info/introduction-s2/',
+                  'hosts': ('megazoo.co.kr','www.megazoo.co.kr'),
+                  'title_pattern': r'(?:메가주|MEGAZOO)',
+                  'date_pattern': r'2026\s*[.]\s*11\s*[.]\s*20.{0,130}?22',
+              },
+              {
+                  'name': '제41회 궁디팡팡 캣페스타',
+                  'start_date': '2026-12-04', 'end_date':'2026-12-06',
+                  'url': 'https://catfesta.com/information/visitor-faq/',
+                  'hosts': ('catfesta.com','www.catfesta.com'),
+                  'title_pattern': r'제\s*41\s*회\s*궁디팡팡',
+                  'date_pattern': r'제\s*41\s*회.{0,110}?2026\s*[.]\s*12\s*[.]\s*4\s*[~\-–]\s*12\s*[.]\s*6',
+              },
+          )
+          event_results, verified_events = [], []
+          for event in EVENT_SOURCES:
+              a = dt.date.fromisoformat(event['start_date'])
+              b = dt.date.fromisoformat(event['end_date'])
+              result = {k:event[k] for k in ('name','start_date','end_date','url')}
+              if b < issue or a > bot.month_later(issue):
+                  result['status'] = 'outside_issue_month'
+              else:
+                  try:
+                      resp = requests.get(event['url'], timeout=16,
+                                          headers={'User-Agent':'KoreaDogNewsEventVerifier/1.0'},
+                                          allow_redirects=True)
+                      resp.raise_for_status()
+                      host = (urlparse(resp.url).hostname or '').lower()
+                      if urlparse(resp.url).scheme != 'https' or host not in event['hosts']:
+                          raise ValueError('Official source redirected to unrelated host')
+                      # Decode displayed text without depending on event publisher HTML layout.
+                      resp.encoding = resp.apparent_encoding or resp.encoding or 'utf-8'
+                      page = html.unescape(re.sub(r'<[^>]+>', ' ', resp.text))
+                      page = re.sub(r'\s+', ' ', page)
+                      if re.search(event['title_pattern'], page, re.I) and re.search(event['date_pattern'], page, re.I):
+                          result['status'] = 'official_page_date_verified'
+                          verified_events.append(result.copy())
+                      else:
+                          result['status'] = 'official_page_date_not_confirmed'
+                  except (requests.RequestException, ValueError, UnicodeError) as exc:
+                      result['status'] = 'source_fetch_or_redirect_failed'
+                      result['error_type'] = type(exc).__name__
+              event_results.append(result)
+              print('EVENT_CHECK ' + json.dumps(result, ensure_ascii=False), flush=True)
+          # Only validated announcements enter the event preview.
+          events = [{k:e[k] for k in ('name','start_date','end_date','url')}
+                    for e in verified_events]
+          (folder/'official-events-report.json').write_text(
+              json.dumps({'issue':str(issue),'discovery':'FIXED_THREE_SOURCES_ONLY',
+                          'results':event_results, 'verified_events':events},
+                         ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
+
+          candidates = load_for_issue(issue)
+          report = {'issue_date':str(issue), 'status':'NOT_PUBLISHED',
+                    'events_verified':len(events),'events_discovery_scope':'FIXED_THREE_OFFICIAL_SOURCES',
+                    'kakao_sent':False, 'openai_used':False}
+          try:
+              record = bot.create_issue(issue, candidates=candidates)
+          except RuntimeError as exc:
+              report['draft_status'] = 'NO_VERIFIED_NEWS__EVENTS_REPORT_ONLY'
+              report['explanation'] = str(exc)
+          else:
+              # The three events are more strictly verified by source-specific
+              # title/date matching above than bot.validate_events' generic matcher.
+              record['events'] = events
+              draft = ('시험용 소식지 초안 · 발송 금지\n'
+                       '행사는 미리 등록한 공식 출처 3곳에서만 재확인했습니다.\n'
+                       '기사 내용 및 편집 적합성 최종 검토 필요.\n\n'
+                       + bot.render_text(record))
+              (folder/'newsletter-preview.txt').write_text(draft, encoding='utf-8')
+              (folder/'newsletter-preview.json').write_text(
+                  json.dumps(record, ensure_ascii=False,indent=2)+'\n', encoding='utf-8')
+              nd = len(record['domestic_industry']) + len(record['domestic_supplement'])
+              ng = len(record['overseas'])
+              report.update({'draft_status':'DRAFT_INCOMPLETE' if nd<15 or ng<5 else 'NEEDS_EDITOR_REVIEW',
+                             'domestic_verified':nd,'overseas_verified':ng})
+          (folder/'coverage-summary.json').write_text(
+              json.dumps(report, ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          print('EVENTS_COVERAGE_COMPLETE ' + json.dumps(report,ensure_ascii=False), flush=True)
+          PY
+      - name: Upload read-only reports and optional preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: pet-industry-events-rss-coverage-test
+          path: preview-output/
+          if-no-files-found: error
+          retention-days: 7
