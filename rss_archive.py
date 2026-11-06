@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 
-from feed_collector import parse_feed, KEYWORDS_KO
+from feed_collector import parse_feed, classify_domestic
 
 TZ = ZoneInfo('Asia/Seoul')
 ROOT = Path(__file__).resolve().parent
@@ -160,10 +160,13 @@ def load_for_issue(issue, *, archive_dir=ARCHIVE):
                 key = _url_key(rec['url'])
                 if category not in CATEGORIES or not (start <= moment < end) or key in seen:
                     continue
-                # Re-screen old RSS archives, as well as new feeds, for explicit pet context.
+                # Apply the same relevance and category rules to older stored
+                # RSS candidates without deleting or rewriting historical files.
                 if category in ('domestic_industry', 'domestic_supplement'):
-                    topic = (rec.get('title', '') + ' ' + rec.get('summary', '')).lower()
-                    if not any(term in topic for term in KEYWORDS_KO):
+                    category = classify_domestic(rec.get('title', ''),
+                                                 rec.get('summary', ''),
+                                                 rec.get('publisher', ''))
+                    if category is None:
                         continue
                 # Only fields recognized by existing bot.validate_news.
                 fields = ('title', 'url', 'publisher', 'published_at', 'summary')

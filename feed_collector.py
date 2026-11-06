@@ -193,6 +193,75 @@ def _source_link(node, source):
 
 
 
+# Domestic editorial prefilter: candidate discovery only, NOT final approval.
+# Ground headline topic first: generic mentions buried in a summary of an
+# unrelated performance or crime must not become pet-industry news.
+_DOMESTIC_HEADLINE_PET = (
+    '반려동물', '반려견', '반려묘', '애견', '애묘', '애완동물',
+    '펫푸드', '펫테크', '펫산업', '펫보험', '펫용품', '펫숍',
+    '펫샵', '펫', '강아지', '고양이', '유기동물', '동물등록',
+    'pet food', 'petfood', 'pet tech', 'pet industry',
+)
+_GOVERNMENT_FEEDS = frozenset({
+    '농림축산식품부 보도자료', '중소벤처기업부 보도자료',
+    '행정안전부 보도자료', '서울시 내 손안에 서울',
+})
+_GOVERNMENT_SUMMARY_PET = (
+    '반려동물', '반려견', '반려묘', '펫푸드', '펫테크', '펫산업',
+    '애견', '애묘', '유기동물', '강아지', '고양이',
+)
+_INCIDENT_HEADLINE = (
+    '사체', '주검', '학대', '죽은', '숨진', '사망',
+    '유골함', '도살', '살해', '동물사건', '입건', '수사', '고발',
+)
+_INDUSTRY_HEADLINE = (
+    '산업', '시장', '기업', '제조', '생산', '수출', '수입',
+    '유통', '투자', '매출', '통계', '정책', '규제', '지원사업',
+    '서비스', '사료', '간식', '펫푸드', '펫테크', '제품',
+    '용품', '브랜드', '사업', '창업', '스타트업', '판매',
+    '출시', '협약', '인력', '육성', '플랫폼', '개발',
+    '가맹', '쇼핑', '매장', '보험', '특허',
+)
+_EVENT_HEADLINE = (
+    '입양', '축제', '캠페인', '자선', '봉사', '문화행사', '박람회',
+)
+
+
+def classify_domestic(title, summary, publisher=''):
+    """Return domestic_industry, domestic_supplement or None (not verified)."""
+    title = (title or '').lower()
+    summary = (summary or '').lower()
+    topic = title + ' ' + summary
+    if any(word in topic for word in BLOCKED_KO):
+        return None
+    anchored = any(word in title for word in _DOMESTIC_HEADLINE_PET)
+    if not anchored:
+        # Limited exception for official civic/government releases with a
+        # clearly identified pet topic in their summary.
+        if publisher not in _GOVERNMENT_FEEDS or not any(
+            word in summary for word in _GOVERNMENT_SUMMARY_PET
+        ):
+            return None
+    # Accidents/crimes are excluded even if their teaser mentions an industry.
+    if any(word in title for word in _INCIDENT_HEADLINE):
+        return None
+    # Adoption/culture are supplemental unless the headline also describes a
+    # concrete commercial/policy/industrial action.
+    has_industry_headline = any(word in title for word in _INDUSTRY_HEADLINE)
+    if any(word in title for word in _EVENT_HEADLINE) and not has_industry_headline:
+        return 'domestic_supplement'
+    if has_industry_headline:
+        return 'domestic_industry'
+    # Some short English headlines need the actual RSS summary for context;
+    # official policy releases can also use an abbreviated headline.
+    if (title.strip() in {'pet food', 'petfood', 'pet tech', 'pet industry'}
+            or publisher in _GOVERNMENT_FEEDS):
+        if any(word in summary for word in INDUSTRY_KO):
+            return 'domestic_industry'
+    return 'domestic_supplement'
+
+
+
 def parse_feed(xml_bytes, source, start, end):
     """Return eligible RSS/Atom candidate records without claiming verified publication."""
     root = ET.fromstring(xml_bytes)
@@ -217,11 +286,9 @@ def parse_feed(xml_bytes, source, start, end):
             if not any(word in topic for word in KEYWORDS_EN):
                 continue
         else:
-            if not any(word in topic for word in KEYWORDS_KO):
+            category = classify_domestic(title, summary, source.get('publisher', ''))
+            if category is None:
                 continue
-            if any(word in topic for word in BLOCKED_KO):
-                continue
-            category = 'domestic_industry' if any(word in topic for word in INDUSTRY_KO) else 'domestic_supplement'
         if not summary:
             summary = title  # transparent source headline, not a generated summary
         result.append((category, {'title':title, 'url':url, 'publisher':source['publisher'],
