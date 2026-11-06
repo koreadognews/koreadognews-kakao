@@ -89,6 +89,62 @@ def _field(node, names):
     return ''
 
 
+
+# Vendor-specific RSS tolerance. Returned values are unverified candidates:
+# bot.validate_news still requires matching publisher-page timestamps.
+LOCAL_RSS_SOURCES = frozenset({
+    '농림축산식품부 보도자료', '중소벤처기업부 보도자료',
+    '행정안전부 보도자료', '매일경제 기업·경영', '매일경제 경제'
+})
+
+
+def _source_date(node, source):
+    raw = _field(node, {'published', 'pubDate', 'date', 'issued', 'regDate', 'datePublished'})
+    if not raw:
+        return None
+    publisher = source.get('publisher', '')
+    # Only approved Korean first-party RSS vendors may use KST for a
+    # timezone-less date. This is NEVER publication verification.
+    assume_kst = publisher in LOCAL_RSS_SOURCES
+    parsed = _date(raw, assume_kst=assume_kst)
+    if parsed is not None:
+        return parsed
+    # Some publishers use a Korean/compact dotted date, not RFC 822.
+    # A full time of day is required; date-only records stay excluded.
+    exact = raw.strip()
+    for fmt in ('%Y.%m.%d %H:%M:%S', '%Y.%m.%d. %H:%M:%S',
+                '%Y.%m.%d %H:%M', '%Y.%m.%d. %H:%M',
+                '%Y년 %m월 %d일 %H:%M:%S', '%Y년 %m월 %d일 %H:%M'):
+        try:
+            candidate = dt.datetime.strptime(exact, fmt)
+        except ValueError:
+            continue
+        return candidate.replace(tzinfo=TZ) if assume_kst else None
+    # Explicit Korean-standard-time suffix from an authorized RSS.
+    if assume_kst and exact.endswith(' KST'):
+        core = exact[:-4].strip()
+        try:
+            candidate = dt.datetime.fromisoformat(core)
+        except ValueError:
+            candidate = None
+        if candidate is not None and candidate.tzinfo is None:
+            return candidate.replace(tzinfo=TZ)
+    return None
+
+
+def _source_link(node, source):
+    raw = _item_link(node)
+    parsed = urlparse(raw)
+    # MAFRA RSS sometimes gives first-party HTTP URLs. Upgrade only
+    # these exact government hosts to HTTPS; never accept third parties.
+    if (source.get('publisher') == '농림축산식품부 보도자료'
+            and parsed.scheme == 'http'
+            and (parsed.hostname or '').lower() in {'www.mafra.go.kr', 'mafra.go.kr'}):
+        return parsed._replace(scheme='https').geturl()
+    return raw
+
+
+
 def parse_feed(xml_bytes, source, start, end):
     """Return eligible RSS/Atom candidate records without claiming verified publication."""
     root = ET.fromstring(xml_bytes)
@@ -97,8 +153,8 @@ def parse_feed(xml_bytes, source, start, end):
         if entry.tag.rsplit('}', 1)[-1] not in ('item', 'entry'):
             continue
         title = _clean(_field(entry, {'title'}))
-        url = _item_link(entry)
-        timestamp = _date(_field(entry, {'published', 'pubDate', 'date', 'issued'}), assume_kst=source.get('publisher') in KST_ASSUMED_SOURCES)
+        url = _source_link(entry, source)
+        timestamp = _source_date(entry, source)
         summary = _clean(_field(entry, {'description', 'summary', 'content', 'encoded'}))[:400]
         if not (title and url and timestamp and start <= timestamp < end):
             continue
@@ -152,7 +208,7 @@ def fetch_candidates(issue, start=None, end=None, *, config_path=None, get=None)
                 if e.tag.rsplit('}', 1)[-1] in ('item', 'entry')
             ]
             dates = [
-                _date(_field(e, {'published', 'pubDate', 'date', 'issued'}))
+                _source_date(e, feed)
                 for e in entries
             ]
             valid_dates = [d for d in dates if d is not None]
