@@ -1,0 +1,249 @@
+name: Korean Pet Industry - Herald RSS Date Repair (Test Only)
+'on':
+  push:
+    branches: [test-safety]
+    paths:
+      - '.github/workflows/rss-herald-date-repair.yml'
+  workflow_dispatch:
+
+# Test branch only. Do not edit main, send Kakao, run OpenAI or publish issues.
+permissions:
+  contents: write
+
+concurrency:
+  group: rss-archive-pilot-test-safety
+  cancel-in-progress: false
+
+jobs:
+  investigate-and-repair-herald:
+    if: github.ref == 'refs/heads/test-safety'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout test-safety only
+        uses: actions/checkout@v4
+        with:
+          ref: test-safety
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Stage narrow Herald RSS timestamp parser
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('feed_collector.py')
+          text = path.read_text(encoding='utf-8')
+          if 'def _source_date_base(node, source):' not in text:
+              anchor = '\ndef _source_date(node, source):\n'
+              if text.count(anchor) != 1:
+                  raise RuntimeError('Unexpected source parser; refusing to modify')
+              text = text.replace(anchor, '\ndef _source_date_base(node, source):\n', 1)
+          helper = '''
+          # This publisher-specific candidate parser does NOT verify publication.
+          # All accepted items still require bot.validate_news original-page checks.
+          HERALD_TEST_PUBLISHERS = frozenset({
+              '헤럴드경제 산업 추가시험', '헤럴드경제 컨슈머 추가시험',
+              '헤럴드경제 생활문화 추가시험', '헤럴드경제 전체 추가시험'
+          })
+
+
+          def _source_date(node, source):
+              known = _source_date_base(node, source)
+              if known is not None:
+                  return known
+              # First-party Herald Google News RSS only; never reinterpret dates
+              # from unrelated publishers or sites as Korean standard time.
+              if (source.get('publisher') not in HERALD_TEST_PUBLISHERS
+                      or not source.get('url', '').startswith('https://biz.heraldcorp.com/rss/google/')
+                      or 'biz.heraldcorp.com' not in source.get('hosts', [])):
+                  return None
+              for child in list(node):
+                  label = child.tag.rsplit('}', 1)[-1].lower()
+                  if label not in {
+                      'pubdate', 'published', 'updated', 'date', 'issued',
+                      'regdate', 'datepublished', 'created', 'publicationdate',
+                      'publishdate', 'datecreated', 'publish_date', 'datetime'
+                  }:
+                      continue
+                  raw = (child.text or '').strip()
+                  # No date-only guessing: exact clock time is mandatory.
+                  if not re.search(r'\\d{1,2}:\\d{2}', raw):
+                      continue
+                  parsed = _date(raw, assume_kst=True)
+                  if parsed:
+                      return parsed
+                  for fmt in (
+                      '%Y.%m.%d %H:%M:%S', '%Y.%m.%d %H:%M',
+                      '%Y.%m.%d. %H:%M:%S', '%Y.%m.%d. %H:%M',
+                      '%Y/%m/%d %H:%M:%S', '%Y/%m/%d %H:%M',
+                      '%Y년 %m월 %d일 %H:%M:%S', '%Y년 %m월 %d일 %H:%M',
+                  ):
+                      try:
+                          return dt.datetime.strptime(raw, fmt).replace(tzinfo=TZ)
+                      except ValueError:
+                          pass
+              return None
+
+
+          '''
+          if 'HERALD_TEST_PUBLISHERS = ' not in text:
+              anchor = '\ndef _source_link(node, source):\n'
+              if text.count(anchor) != 1:
+                  raise RuntimeError('Could not find Herald parser insertion point')
+              text = text.replace(anchor, '\n' + helper + anchor, 1)
+          path.write_text(text, encoding='utf-8')
+          print('HERALD_DATE_PATCH_STAGED', flush=True)
+          PY
+      - name: Run offline safety and regression tests
+        env:
+          OPENAI_API_KEY: ''
+          KAKAO_REST_API_KEY: ''
+          KAKAO_REFRESH_TOKEN: ''
+        run: |
+          python -m py_compile feed_collector.py rss_archive.py bot.py
+          python rss_archive.py --selftest
+          python -m unittest discover -s tests -p 'test_*.py' -v
+          python - <<'PY'
+          import datetime as dt
+          import xml.etree.ElementTree as ET
+          from zoneinfo import ZoneInfo
+          from feed_collector import _source_date, parse_feed
+
+          feed = {
+              'publisher':'헤럴드경제 산업 추가시험',
+              'category':'domestic',
+              'url':'https://biz.heraldcorp.com/rss/google/industry',
+              'hosts':['biz.heraldcorp.com']
+          }
+          def make(dt_value):
+              return ET.fromstring(
+                  '<item><title>반려동물 펫푸드 수출 확대</title>'
+                  '<link>https://biz.heraldcorp.com/article/1234</link>'
+                  '<pubDate>'+dt_value+'</pubDate>'
+                  '<description>반려동물 식품 산업</description></item>')
+          assert _source_date(make('2026.11.06 18:30:00'), feed).hour == 18
+          assert _source_date(make('2026-11-06T18:30:00'), feed).hour == 18
+          assert _source_date(make('2026.11.06'), feed) is None
+          stranger={**feed,'publisher':'Other source'}
+          assert _source_date(make('2026.11.06 18:30:00'), stranger) is None
+          for tag in ('updated','date','regDate'):
+              item=make('2026.11.06 18:30:00')
+              item.find('pubDate').tag=tag
+              assert _source_date(item, feed) is not None
+          encoded=ET.tostring(make('2026.11.06 18:30:00'),encoding='utf-8')
+          data=b'<rss><channel>'+encoded+b'</channel></rss>'
+          start=dt.datetime(2026,11,6,6,tzinfo=ZoneInfo('Asia/Seoul'))
+          end=dt.datetime(2026,11,7,6,tzinfo=ZoneInfo('Asia/Seoul'))
+          assert len(parse_feed(data, feed, start, end)) == 1
+          print('HERALD_DATE_OFFLINE_TESTS_PASSED',flush=True)
+          PY
+      - name: Compare live Herald RSS fields and verify publisher timestamps
+        env:
+          OPENAI_API_KEY: ''
+          KAKAO_REST_API_KEY: ''
+          KAKAO_REFRESH_TOKEN: ''
+          GH_TOKEN: ''
+          GITHUB_TOKEN: ''
+        run: |
+          python - <<'PY'
+          import datetime as dt
+          import json
+          import xml.etree.ElementTree as ET
+          from urllib.parse import urlsplit
+          from zoneinfo import ZoneInfo
+
+          import requests
+          import feed_collector as fc
+          import bot
+
+          addresses=(
+              ('헤럴드경제 산업 추가시험','industry'),
+              ('헤럴드경제 컨슈머 추가시험','consumer'),
+              ('헤럴드경제 생활문화 추가시험','culture'),
+              ('헤럴드경제 전체 추가시험','newsAll'),
+          )
+          now=dt.datetime.now(ZoneInfo('Asia/Seoul'))
+          start=now-dt.timedelta(days=8)
+          end=now+dt.timedelta(minutes=2)
+          increased=0
+          verified=0
+          candidates=0
+          results=[]
+          for name, section in addresses:
+              feed={'publisher':name,'category':'domestic',
+                    'url':'https://biz.heraldcorp.com/rss/google/'+section,
+                    'hosts':['biz.heraldcorp.com']}
+              response=requests.get(feed['url'], timeout=17, headers={'User-Agent':'KoreaDogNewsHeraldRSSCheck/1.0'})
+              response.raise_for_status()
+              items=[n for n in ET.fromstring(response.content).iter() if n.tag.rsplit('}',1)[-1] in ('item','entry')]
+              old=[fc._source_date_base(n, feed) for n in items]
+              new=[fc._source_date(n, feed) for n in items]
+              before=sum(x is not None for x in old)
+              after=sum(x is not None for x in new)
+              if after < before:
+                  raise RuntimeError('Herald parsing regression: '+name)
+              increased+=after-before
+              rows=fc.parse_feed(response.content, feed, start, end)
+              candidates+=len(rows)
+              # Only date-like fields, never article bodies, are written to logs.
+              samples=[]
+              for n in items[:2]:
+                  samples.append([{'tag':c.tag.rsplit('}',1)[-1],
+                                   'date_like_text':(c.text or '').strip()[:110]}
+                                  for c in n if 'date' in c.tag.lower() or 'time' in c.tag.lower()
+                                  or c.tag.rsplit('}',1)[-1].lower() in ('published','updated','issued')])
+              print('HERALD_SOURCE_FORMAT '+json.dumps({
+                  'publisher':name, 'items':len(items),'old_dates':before,
+                  'new_dates':after,'pet_candidates_8days':len(rows),
+                  'date_field_samples':samples
+              },ensure_ascii=False),flush=True)
+              # Verify at most 2 actual publisher pages per feed. Source metadata
+              # must agree with candidate timestamp within 120 seconds.
+              for node, stamp in [(n,t) for n,t in zip(items,new) if t and start<=t<end][:2]:
+                  link=urlsplit(fc._source_link(node,feed))
+                  if link.scheme!='https' or link.hostname!='biz.heraldcorp.com':
+                      continue
+                  status='not_confirmed'
+                  try:
+                      html=bot.get_source(link.geturl())
+                      times=bot.source_metadata_times(html)
+                      if any(abs((stamp - value).total_seconds())<=120 for value in times):
+                          status='source_timestamp_matched'
+                          verified+=1
+                  except (requests.RequestException, ValueError) as exc:
+                      status='publisher_fetch_'+type(exc).__name__
+                  print('HERALD_ORIGINAL_CHECK '+json.dumps({
+                      'publisher':name,'url':link.geturl(),'status':status
+                  },ensure_ascii=False),flush=True)
+              results.append({'publisher':name,'old_dates':before,'new_dates':after,'candidate_count':len(rows)})
+          if increased == 0:
+              raise RuntimeError('No real Herald RSS date format improvement; patch NOT committed')
+          if verified == 0:
+              raise RuntimeError('No original Herald pages matched RSS date; patch NOT committed')
+          print('HERALD_LIVE_IMPROVEMENT '+json.dumps({
+              'newly_parsed_dates':increased,'candidate_count_8days':candidates,
+              'source_metadata_matches':verified,
+              'publisher_count':len(results)
+          },ensure_ascii=False),flush=True)
+          PY
+      - name: Commit validated parser on test-safety only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add feed_collector.py
+          if git diff --cached --quiet; then
+            echo 'HERALD_PARSER_ALREADY_PRESENT'
+            exit 0
+          fi
+          git commit -m 'Safely parse verified Herald RSS date fields [skip ci]'
+          git pull --rebase origin test-safety
+          git push origin HEAD:test-safety
+          echo 'HERALD_REPAIR_TEST_BRANCH_COMMITTED'
