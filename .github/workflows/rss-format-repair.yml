@@ -1,0 +1,225 @@
+name: Korean Pet Industry - Repair RSS Dates and MAFRA Links (Test Only)
+
+'on':
+  push:
+    branches: [test-safety]
+    paths:
+      - '.github/workflows/rss-format-repair.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rss-archive-pilot-test-safety
+  cancel-in-progress: false
+
+jobs:
+  safe-source-format-repair:
+    if: github.ref == 'refs/heads/test-safety'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout test-safety only
+        uses: actions/checkout@v4
+        with:
+          ref: test-safety
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install existing test dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Repair first-party RSS source parsing (test branch only)
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('feed_collector.py')
+          source = path.read_text(encoding='utf-8')
+          insertion = '''
+          # Vendor-specific RSS tolerance. Returned values are unverified candidates:
+          # bot.validate_news still requires matching publisher-page timestamps.
+          LOCAL_RSS_SOURCES = frozenset({
+              '농림축산식품부 보도자료', '중소벤처기업부 보도자료',
+              '행정안전부 보도자료', '매일경제 기업·경영', '매일경제 경제'
+          })
+
+
+          def _source_date(node, source):
+              raw = _field(node, {'published', 'pubDate', 'date', 'issued', 'regDate', 'datePublished'})
+              if not raw:
+                  return None
+              publisher = source.get('publisher', '')
+              # Only approved Korean first-party RSS vendors may use KST for a
+              # timezone-less date. This is NEVER publication verification.
+              assume_kst = publisher in LOCAL_RSS_SOURCES
+              parsed = _date(raw, assume_kst=assume_kst)
+              if parsed is not None:
+                  return parsed
+              # Some publishers use a Korean/compact dotted date, not RFC 822.
+              # A full time of day is required; date-only records stay excluded.
+              exact = raw.strip()
+              for fmt in ('%Y.%m.%d %H:%M:%S', '%Y.%m.%d. %H:%M:%S',
+                          '%Y.%m.%d %H:%M', '%Y.%m.%d. %H:%M',
+                          '%Y년 %m월 %d일 %H:%M:%S', '%Y년 %m월 %d일 %H:%M'):
+                  try:
+                      candidate = dt.datetime.strptime(exact, fmt)
+                  except ValueError:
+                      continue
+                  return candidate.replace(tzinfo=TZ) if assume_kst else None
+              # Explicit Korean-standard-time suffix from an authorized RSS.
+              if assume_kst and exact.endswith(' KST'):
+                  core = exact[:-4].strip()
+                  try:
+                      candidate = dt.datetime.fromisoformat(core)
+                  except ValueError:
+                      candidate = None
+                  if candidate is not None and candidate.tzinfo is None:
+                      return candidate.replace(tzinfo=TZ)
+              return None
+
+
+          def _source_link(node, source):
+              raw = _item_link(node)
+              parsed = urlparse(raw)
+              # MAFRA RSS sometimes gives first-party HTTP URLs. Upgrade only
+              # these exact government hosts to HTTPS; never accept third parties.
+              if (source.get('publisher') == '농림축산식품부 보도자료'
+                      and parsed.scheme == 'http'
+                      and (parsed.hostname or '').lower() in {'www.mafra.go.kr', 'mafra.go.kr'}):
+                  return parsed._replace(scheme='https').geturl()
+              return raw
+
+
+          '''
+          anchor = '\ndef parse_feed(xml_bytes, source, start, end):\n'
+          if 'def _source_date(node, source):' not in source:
+              if source.count(anchor) != 1:
+                  raise RuntimeError('Could not safely locate parse_feed insertion point')
+              source = source.replace(anchor, '\n' + insertion + anchor, 1)
+          old_parse = '        url = _item_link(entry)\n        timestamp = _date(_field(entry, {\'published\', \'pubDate\', \'date\', \'issued\'}), assume_kst=source.get(\'publisher\') in KST_ASSUMED_SOURCES)\n'
+          new_parse = '        url = _source_link(entry, source)\n        timestamp = _source_date(entry, source)\n'
+          if old_parse in source:
+              source = source.replace(old_parse, new_parse, 1)
+          elif new_parse not in source:
+              raise RuntimeError('Unexpected parse_feed implementation; aborting safely')
+          old_diagnostic = "                _date(_field(e, {'published', 'pubDate', 'date', 'issued'}))\n                for e in entries\n"
+          new_diagnostic = "                _source_date(e, feed)\n                for e in entries\n"
+          if old_diagnostic in source:
+              source = source.replace(old_diagnostic, new_diagnostic, 1)
+          elif new_diagnostic not in source:
+              raise RuntimeError('Unexpected fetch_candidates diagnostics; aborting safely')
+          path.write_text(source, encoding='utf-8')
+          print('RSS_SOURCE_FORMAT_PATCH_STAGED', flush=True)
+          PY
+      - name: Offline regression and strict-domain tests
+        env:
+          OPENAI_API_KEY: ''
+          KAKAO_REST_API_KEY: ''
+          KAKAO_REFRESH_TOKEN: ''
+          KAKAO_CLIENT_SECRET: ''
+        run: |
+          python -m py_compile feed_collector.py rss_archive.py bot.py
+          python rss_archive.py --selftest
+          python -m unittest discover -s tests -p 'test_*.py' -v
+          python - <<'PY'
+          import datetime as dt
+          from zoneinfo import ZoneInfo
+          import xml.etree.ElementTree as ET
+          from feed_collector import _source_date, _source_link, parse_feed
+
+          tz = ZoneInfo('Asia/Seoul')
+          def node(date, link):
+              return ET.fromstring('<item><title>반려동물 사료 제조 투자</title><link>'+link+'</link><pubDate>'+date+'</pubDate><description>펫푸드 제조 사업</description></item>')
+          government = {'publisher':'농림축산식품부 보도자료','category':'domestic','hosts':['www.mafra.go.kr','mafra.go.kr']}
+          mk = {'publisher':'매일경제 경제','category':'domestic','hosts':['www.mk.co.kr','mk.co.kr']}
+          unknown = {'publisher':'Example','category':'domestic','hosts':['example.org']}
+          assert _source_date(node('2026-11-06 18:50:15.843','https://www.mafra.go.kr/a'), government).hour == 18
+          assert _source_date(node('금, 06 11월 2026 12:00:00 KST','https://www.mafra.go.kr/a'), {'publisher':'행정안전부 보도자료'}).hour == 12
+          assert _source_date(node('2026.11.06 17:30:00','https://www.mk.co.kr/a'),mk).hour == 17
+          assert _source_date(node('2026.11.06 17:30:00','https://example.org/a'),unknown) is None
+          assert _source_date(node('2026.11.06','https://www.mk.co.kr/a'),mk) is None
+          item = node('2026-11-06 18:50:15.843','http://www.mafra.go.kr/news')
+          assert _source_link(item,government)=='https://www.mafra.go.kr/news'
+          item = node('2026-11-06 18:50:15.843','http://evil.example/news')
+          assert _source_link(item,government)=='http://evil.example/news'
+          item = node('2026.11.06 17:30:00','https://www.mk.co.kr/article/123')
+          b=ET.tostring(ET.Element('rss'), encoding='utf-8')
+          rss='<rss><channel>'+ET.tostring(item,encoding='unicode')+'</channel></rss>'
+          start=dt.datetime(2026,11,6,6,tzinfo=tz)
+          end=dt.datetime(2026,11,7,6,tzinfo=tz)
+          assert len(parse_feed(rss.encode(),mk,start,end)) == 1
+          assert parse_feed(rss.encode(),unknown,start,end) == []
+          print('RSS_FORMAT_OFFLINE_TESTS_PASSED',flush=True)
+          PY
+      - name: Diagnose live publisher RSS formats (no publisher article scraping)
+        env:
+          OPENAI_API_KEY: ''
+          KAKAO_REST_API_KEY: ''
+          KAKAO_REFRESH_TOKEN: ''
+        run: |
+          python - <<'PY'
+          import datetime as dt
+          import json
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          from urllib.parse import urlparse
+          from zoneinfo import ZoneInfo
+          import requests
+          import feed_collector as fc
+
+          target = {'농림축산식품부 보도자료', '행정안전부 보도자료', '매일경제 기업·경영', '매일경제 경제'}
+          now = dt.datetime.now(ZoneInfo('Asia/Seoul'))
+          window_start, window_end = now-dt.timedelta(days=8), now+dt.timedelta(minutes=2)
+          cfg = json.loads(Path('feeds.json').read_text(encoding='utf-8'))
+          outcomes = []
+          for source in cfg['feeds']:
+              if source['publisher'] not in target:
+                  continue
+              try:
+                  resp = requests.get(source['url'], timeout=15,headers={'User-Agent':'KoreaDogNewsRSSDateRepair/1.0'})
+                  resp.raise_for_status()
+                  items = [node for node in ET.fromstring(resp.content).iter() if node.tag.rsplit('}',1)[-1] in ('item','entry')]
+                  old_dates = sum(fc._date(fc._field(n, {'published','pubDate','date','issued'}), assume_kst=source['publisher'] in fc.KST_ASSUMED_SOURCES) is not None for n in items)
+                  new_dates = sum(fc._source_date(n, source) is not None for n in items)
+                  new_links = sum(urlparse(fc._source_link(n,source)).scheme == 'https' and (urlparse(fc._source_link(n,source)).hostname or '').lower() in source['hosts'] for n in items)
+                  old_links = sum(urlparse(fc._item_link(n)).scheme == 'https' and (urlparse(fc._item_link(n)).hostname or '').lower() in source['hosts'] for n in items)
+                  candidates = fc.parse_feed(resp.content, source, window_start, window_end)
+                  first = items[0] if items else None
+                  sample = {'date':fc._field(first,{'published','pubDate','date','issued','regDate','datePublished'})[:90],
+                            'link_scheme':urlparse(fc._item_link(first)).scheme,
+                            'link_host':urlparse(fc._item_link(first)).hostname} if first is not None else {}
+                  result = {'publisher':source['publisher'],'items':len(items),'old_dates':old_dates,'new_dates':new_dates,
+                            'old_https_links':old_links,'new_https_links':new_links,'pet_candidates':len(candidates),'sample':sample}
+                  outcomes.append(result)
+                  print('RSS_FORMAT_LIVE '+json.dumps(result,ensure_ascii=False),flush=True)
+              except (requests.RequestException,ET.ParseError,KeyError,ValueError) as exc:
+                  print('RSS_FORMAT_FETCH_FAILED '+json.dumps({'publisher':source['publisher'],'error':type(exc).__name__},ensure_ascii=False),flush=True)
+          if len(outcomes) != len(target):
+              raise RuntimeError('Some target RSS feeds unavailable; patch not committed')
+          if any(o['new_dates'] < o['old_dates'] or o['new_https_links'] < o['old_https_links'] for o in outcomes):
+              raise RuntimeError('RSS feed parsing regressed; patch not committed')
+          improvement = sum((o['new_dates']-o['old_dates'])+(o['new_https_links']-o['old_https_links']) for o in outcomes)
+          if improvement == 0:
+              print('RSS_FORMAT_NO_IMPROVEMENT; source formats need deeper inspection',flush=True)
+              raise RuntimeError('No verified improvement on live feeds; no code committed')
+          print('RSS_FORMAT_LIVE_IMPROVEMENT '+str(improvement),flush=True)
+          PY
+      - name: Commit only validated test-branch parser
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add feed_collector.py
+          if git diff --cached --quiet; then
+            echo 'RSS_FORMAT_PARSER_ALREADY_APPLIED'
+            exit 0
+          fi
+          git commit -m 'Repair approved Korean publisher RSS metadata handling [skip ci]'
+          git pull --rebase origin test-safety
+          git push origin HEAD:test-safety
+          echo 'RSS_FORMAT_REPAIR_TEST_SAFETY_ONLY'
