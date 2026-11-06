@@ -117,8 +117,35 @@ def fetch_candidates(issue, start=None, end=None, *, config_path=None, get=None)
         try:
             response = requester(feed['url'], timeout=12, headers={'User-Agent': 'KoreaDogNewsFeedBot/1.0'})
             response.raise_for_status()
-            items = parse_feed(response.content, feed, start, end)
-            for category, entry in items:
+            entries = [
+                e for e in ET.fromstring(response.content).iter()
+                if e.tag.rsplit('}', 1)[-1] in ('item', 'entry')
+            ]
+            dates = [
+                _date(_field(e, {'published', 'pubDate', 'date', 'issued'}))
+                for e in entries
+            ]
+            valid_dates = [d for d in dates if d is not None]
+            in_window = sum(1 for d in valid_dates if start <= d < end)
+            sample = next(
+                (e for e, d in zip(entries, dates)
+                 if d is not None and start <= d < end),
+                entries[0] if entries else None
+            )
+            sample_url = _item_link(sample) if sample is not None else ''
+            logging.warning(
+                "RSS DIAG %s: total=%d dated=%d in_window=%d "
+                "newest=%s oldest=%s host=%s scheme=%s",
+                feed['publisher'],
+                len(entries),
+                len(valid_dates),
+                in_window,
+                max(valid_dates).isoformat() if valid_dates else "none",
+                min(valid_dates).isoformat() if valid_dates else "none",
+                urlparse(sample_url).hostname or "none",
+                urlparse(sample_url).scheme or "none"
+            )
+                for category, entry in items:
                 candidates[category].append(entry)
             successes += 1
             logging.info('Feed %s: %d candidates', feed['publisher'], len(items))
