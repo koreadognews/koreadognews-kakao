@@ -98,7 +98,7 @@ LOCAL_RSS_SOURCES = frozenset({
 })
 
 
-def _source_date(node, source):
+def _source_date_base(node, source):
     raw = _field(node, {'published', 'pubDate', 'date', 'issued', 'regDate', 'datePublished'})
     if not raw:
         return None
@@ -130,6 +130,54 @@ def _source_date(node, source):
         if candidate is not None and candidate.tzinfo is None:
             return candidate.replace(tzinfo=TZ)
     return None
+
+
+
+# This publisher-specific candidate parser does NOT verify publication.
+# All accepted items still require bot.validate_news original-page checks.
+HERALD_TEST_PUBLISHERS = frozenset({
+    '헤럴드경제 산업 추가시험', '헤럴드경제 컨슈머 추가시험',
+    '헤럴드경제 생활문화 추가시험', '헤럴드경제 전체 추가시험'
+})
+
+
+def _source_date(node, source):
+    known = _source_date_base(node, source)
+    if known is not None:
+        return known
+    # First-party Herald Google News RSS only; never reinterpret dates
+    # from unrelated publishers or sites as Korean standard time.
+    if (source.get('publisher') not in HERALD_TEST_PUBLISHERS
+            or not source.get('url', '').startswith('https://biz.heraldcorp.com/rss/google/')
+            or 'biz.heraldcorp.com' not in source.get('hosts', [])):
+        return None
+    for child in list(node):
+        label = child.tag.rsplit('}', 1)[-1].lower()
+        if label not in {
+            'pubdate', 'published', 'updated', 'date', 'issued',
+            'regdate', 'datepublished', 'created', 'publicationdate',
+            'publishdate', 'datecreated', 'publish_date', 'datetime'
+        }:
+            continue
+        raw = (child.text or '').strip()
+        # No date-only guessing: exact clock time is mandatory.
+        if not re.search(r'\d{1,2}:\d{2}', raw):
+            continue
+        parsed = _date(raw, assume_kst=True)
+        if parsed:
+            return parsed
+        for fmt in (
+            '%Y.%m.%d %H:%M:%S', '%Y.%m.%d %H:%M',
+            '%Y.%m.%d. %H:%M:%S', '%Y.%m.%d. %H:%M',
+            '%Y/%m/%d %H:%M:%S', '%Y/%m/%d %H:%M',
+            '%Y년 %m월 %d일 %H:%M:%S', '%Y년 %m월 %d일 %H:%M',
+        ):
+            try:
+                return dt.datetime.strptime(raw, fmt).replace(tzinfo=TZ)
+            except ValueError:
+                pass
+    return None
+
 
 
 def _source_link(node, source):
