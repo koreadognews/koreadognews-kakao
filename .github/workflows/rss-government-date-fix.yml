@@ -101,7 +101,7 @@ jobs:
       - name: Check syntax, original offline tests, and government date examples
         shell: bash
         run: |
-          python -m pip install 'requests>=2.32,<3'
+          python -m pip install -r requirements.txt
           python -m py_compile feed_collector.py rss_archive.py bot.py
           python rss_archive.py --selftest
           python -m unittest discover -s tests -p 'test_*.py' -v
