@@ -1,0 +1,152 @@
+name: Korean Pet Industry RSS Source Diagnostics (Read Only)
+
+'on':
+  push:
+    branches: [test-safety]
+    paths:
+      - '.github/workflows/rss-diagnostics.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose-rss:
+    if: github.ref == 'refs/heads/test-safety'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout test-safety branch
+        uses: actions/checkout@v4
+        with:
+          ref: test-safety
+          persist-credentials: false
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install only requests (no API credentials)
+        run: python -m pip install 'requests>=2.32,<3'
+      - name: Confirm existing archive self-tests
+        run: python rss_archive.py --selftest
+      - name: Diagnose RSS filters and original source timestamps
+        env:
+          OPENAI_API_KEY: ''
+          KAKAO_REST_API_KEY: ''
+          KAKAO_REFRESH_TOKEN: ''
+          GH_TOKEN: ''
+        run: |
+          python - <<'PY'
+          import collections
+          import datetime as dt
+          import json
+          import logging
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          from urllib.parse import urlparse
+          
+          import requests
+          
+          import bot
+          import feed_collector as fc
+          from rss_archive import load_for_issue
+          
+          KST = fc.TZ
+          now = dt.datetime.now(KST)
+          start = now - dt.timedelta(days=8)
+          end = now + dt.timedelta(minutes=2)
+          
+          print('DIAG_START time_KST=' + now.isoformat(), flush=True)
+          feeds = json.loads(Path('feeds.json').read_text(encoding='utf-8'))['feeds']
+          for feed in feeds:
+              if not feed.get('enabled', True):
+                  continue
+              name = feed.get('publisher', '?')
+              try:
+                  response = requests.get(feed['url'], timeout=12,
+                                          headers={'User-Agent': 'KoreaDogNewsArchiveDiagnostics/1.0'})
+                  response.raise_for_status()
+                  root = ET.fromstring(response.content)
+                  entries = [e for e in root.iter() if e.tag.rsplit('}', 1)[-1] in ('item', 'entry')]
+                  counts = collections.Counter()
+                  timestamps = []
+                  for entry in entries:
+                      counts['total'] += 1
+                      published = fc._date(fc._field(entry, {'published', 'pubDate', 'date', 'issued'}))
+                      if not published:
+                          counts['missing_or_unreadable_date'] += 1
+                          continue
+                      timestamps.append(published)
+                      if not (start <= published < end):
+                          counts['outside_8day_window'] += 1
+                          continue
+                      counts['within_8days'] += 1
+                      url = fc._item_link(entry)
+                      parsed = urlparse(url)
+                      if parsed.scheme != 'https' or parsed.hostname not in feed['hosts']:
+                          counts['bad_url_or_domain'] += 1
+                          continue
+                      counts['valid_original_domain'] += 1
+                      title = fc._clean(fc._field(entry, {'title'}))
+                      summary = fc._clean(fc._field(entry, {'description', 'summary', 'content', 'encoded'}))
+                      topic = (title + ' ' + summary).lower()
+                      if feed['category'] == 'overseas':
+                          matches = any(word in topic for word in fc.KEYWORDS_EN)
+                      else:
+                          matches = any(word in topic for word in fc.KEYWORDS_KO)
+                      if not title or not matches:
+                          counts['missing_title_or_topic_keyword'] += 1
+                          continue
+                      if feed['category'] == 'domestic' and any(word in topic for word in fc.BLOCKED_KO):
+                          counts['excluded_medical_topic'] += 1
+                          continue
+                      counts['eligible'] += 1
+                  actual = fc.parse_feed(response.content, feed, start, end)
+                  latest = max(timestamps).isoformat() if timestamps else 'none'
+                  print('DIAG_FEED ' + json.dumps({
+                      'publisher': name, 'total': counts['total'], 'dated': len(timestamps),
+                      'within_8days': counts['within_8days'],
+                      'valid_original_domain': counts['valid_original_domain'],
+                      'missing_or_unreadable_date': counts['missing_or_unreadable_date'],
+                      'outside_8day_window': counts['outside_8day_window'],
+                      'bad_url_or_domain': counts['bad_url_or_domain'],
+                      'missing_title_or_topic_keyword': counts['missing_title_or_topic_keyword'],
+                      'excluded_medical_topic': counts['excluded_medical_topic'],
+                      'eligible': len(actual), 'latest': latest,
+                      'sample_url_host': urlparse(fc._item_link(entries[0])).hostname if entries else None
+                  }, ensure_ascii=False), flush=True)
+              except (requests.RequestException, ET.ParseError, KeyError, ValueError) as exc:
+                  print('DIAG_FEED_ERROR ' + json.dumps({'publisher': name, 'error_type': type(exc).__name__},
+                                                       ensure_ascii=False), flush=True)
+          
+          # Read-only confirmation of candidates already stored for the known test issue.
+          issue = dt.date(2026, 11, 6)
+          rows = load_for_issue(issue)
+          counts = {key: len(value) for key, value in rows.items()}
+          print('DIAG_ARCHIVE_ISSUE ' + json.dumps({'issue': str(issue), 'counts': counts},
+                                                   ensure_ascii=False), flush=True)
+          # Remote original-page metadata check: candidates are NOT considered published without editor validation.
+          for section in ('domestic_industry', 'domestic_supplement', 'overseas'):
+              for item in rows[section][:5]:
+                  url = item['url']
+                  expected = bot.parse_aware_timestamp(item['published_at'])
+                  try:
+                      original = bot.get_source(url)
+                      times = bot.source_metadata_times(original)
+                      matches = [x for x in times if expected and abs((x - expected).total_seconds()) <= 120]
+                      print('DIAG_ORIGINAL ' + json.dumps({
+                          'section': section,
+                          'url': url,
+                          'rss_published_at': item['published_at'],
+                          'metadata_count': len(times),
+                          'metadata_matches_rss_within_120s': bool(matches),
+                          'result': 'timestamp_match' if matches else 'timestamp_not_confirmed'
+                      }, ensure_ascii=False), flush=True)
+                  except (requests.RequestException, ValueError, UnicodeError, OSError) as exc:
+                      print('DIAG_ORIGINAL ' + json.dumps({
+                          'section': section, 'url': url,
+                          'result': 'source_fetch_failed', 'error_type': type(exc).__name__
+                      }, ensure_ascii=False), flush=True)
+          
+          print('DIAG_COMPLETE read_only=true no_kakao=true no_openai=true', flush=True)
+          PY
