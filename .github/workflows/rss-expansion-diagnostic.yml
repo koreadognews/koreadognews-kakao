@@ -1,0 +1,223 @@
+name: Korean Pet Industry - Expand Mainstream RSS Coverage (Read Only)
+'on':
+  push:
+    branches: [test-safety]
+    paths:
+      - '.github/workflows/rss-expansion-diagnostic.yml'
+  workflow_dispatch:
+
+# Read-only diagnostics. No main branch, Kakao, OpenAI, feeds.json or archive edits.
+permissions:
+  contents: read
+
+jobs:
+  compare-official-feeds:
+    if: github.ref == 'refs/heads/test-safety'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout test-safety with no write credentials
+        uses: actions/checkout@v4
+        with:
+          ref: test-safety
+          persist-credentials: false
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test requirements
+        run: python -m pip install -r requirements.txt
+      - name: Offline safety tests
+        env:
+          OPENAI_API_KEY: ''
+          KAKAO_REST_API_KEY: ''
+          KAKAO_REFRESH_TOKEN: ''
+        run: |
+          python -m py_compile bot.py rss_archive.py feed_collector.py
+          python rss_archive.py --selftest
+          python -m unittest discover -s tests -p 'test_*.py'
+      - name: Test supplementary official RSS sources and original timestamps
+        env:
+          OPENAI_API_KEY: ''
+          KAKAO_REST_API_KEY: ''
+          KAKAO_REFRESH_TOKEN: ''
+          GH_TOKEN: ''
+          GITHUB_TOKEN: ''
+        run: |
+          python - <<'PY'
+          import datetime as dt
+          import json
+          from pathlib import Path
+          from urllib.parse import urlsplit
+          from zoneinfo import ZoneInfo
+          import xml.etree.ElementTree as ET
+
+          import requests
+          import feed_collector as fc
+          import bot
+          from rss_archive import _read_day, ARCHIVE
+
+          # Official RSS directories: Newsis, Hankyung, Herald Economy.
+          # Fnnews general feed URL is a candidate for verification, not a prior approval.
+          # No sources are added to feeds.json in this read-only test.
+          EXTRA_FEEDS = (
+              {'publisher': '뉴시스 사회 추가시험', 'url': 'https://www.newsis.com/RSS/society.xml', 'hosts':['www.newsis.com','newsis.com','nwww.newsis.com']},
+              {'publisher': '뉴시스 문화 추가시험', 'url': 'https://www.newsis.com/RSS/culture.xml', 'hosts':['www.newsis.com','newsis.com','nwww.newsis.com']},
+              {'publisher': '뉴시스 수도권 추가시험', 'url': 'https://www.newsis.com/RSS/met.xml', 'hosts':['www.newsis.com','newsis.com','nwww.newsis.com']},
+              {'publisher': '한국경제 전체 추가시험', 'url': 'https://www.hankyung.com/feed/all-news', 'hosts':['www.hankyung.com','hankyung.com']},
+              {'publisher': '한국경제 IT 추가시험', 'url': 'https://www.hankyung.com/feed/it', 'hosts':['www.hankyung.com','hankyung.com']},
+              {'publisher': '한국경제 사회 추가시험', 'url': 'https://www.hankyung.com/feed/society', 'hosts':['www.hankyung.com','hankyung.com']},
+              {'publisher': '헤럴드경제 산업 추가시험', 'url': 'https://biz.heraldcorp.com/rss/google/industry', 'hosts':['biz.heraldcorp.com']},
+              {'publisher': '헤럴드경제 컨슈머 추가시험', 'url': 'https://biz.heraldcorp.com/rss/google/consumer', 'hosts':['biz.heraldcorp.com']},
+              {'publisher': '헤럴드경제 생활문화 추가시험', 'url': 'https://biz.heraldcorp.com/rss/google/culture', 'hosts':['biz.heraldcorp.com']},
+              {'publisher': '헤럴드경제 전체 추가시험', 'url': 'https://biz.heraldcorp.com/rss/google/newsAll', 'hosts':['biz.heraldcorp.com']},
+              {'publisher': '파이낸셜뉴스 전체 추가시험', 'url': 'https://www.fnnews.com/rss/r20/fn_realnews_all.xml', 'hosts':['www.fnnews.com','fnnews.com']},
+          )
+
+          now = dt.datetime.now(ZoneInfo('Asia/Seoul'))
+          latest_closed = now.date() if now.time() >= dt.time(6) else now.date() - dt.timedelta(days=1)
+          start_issue, end_issue = bot.bounds(latest_closed)
+          start8 = now - dt.timedelta(days=8)
+          end8 = now + dt.timedelta(minutes=2)
+          output = Path('expansion-diagnostics')
+          output.mkdir(exist_ok=True)
+
+          # Only URL fingerprints of pre-existing archives, never modify the files.
+          def key(url):
+              p = urlsplit(url)
+              return ((p.hostname or '').lower(), p.path.rstrip('/'), p.query)
+
+          stored = set()
+          for offset in range(9):
+              day = now.date() - dt.timedelta(days=offset)
+              try:
+                  for rec in _read_day(ARCHIVE, day):
+                      if isinstance(rec, dict) and isinstance(rec.get('url'), str):
+                          stored.add(key(rec['url']))
+              except (ValueError, OSError, json.JSONDecodeError) as exc:
+                  print('ARCHIVE_READ_WARNING '+repr(type(exc).__name__), flush=True)
+
+          baseline = json.loads(Path('feeds.json').read_text(encoding='utf-8'))['feeds']
+          base_urls = {f['url'] for f in baseline if f.get('enabled',True)}
+          checked = []
+          unique_new = {}
+          seen_across_new_feeds = set()
+          for raw in EXTRA_FEEDS:
+              feed = {**raw, 'category':'domestic', 'enabled': True}
+              row = {'publisher':feed['publisher'], 'feed_url':feed['url'], 'status':'unknown',
+                     'commercial_republication_rights':'NOT_VERIFIED',
+                     'baseline_feed_duplicate': feed['url'] in base_urls}
+              if row['baseline_feed_duplicate']:
+                  row['status']='already_configured'
+                  checked.append(row)
+                  continue
+              try:
+                  response = requests.get(feed['url'], timeout=14, headers={'User-Agent':'KoreaDogNewsRSSTest/1.0'})
+                  response.raise_for_status()
+                  root = ET.fromstring(response.content)
+                  entries = [n for n in root.iter() if n.tag.rsplit('}',1)[-1] in ('item','entry')]
+                  fresh = 0
+                  first_party = 0
+                  readable = 0
+                  in_issue = 0
+                  for item in entries:
+                      when = fc._source_date(item, feed)
+                      if when is None:
+                          continue
+                      readable += 1
+                      link = urlsplit(fc._source_link(item,feed))
+                      good_link = link.scheme == 'https' and (link.hostname or '').lower() in feed['hosts']
+                      if not good_link:
+                          continue
+                      first_party += 1
+                      if start8 <= when < end8:
+                          fresh += 1
+                      if start_issue <= when < end_issue:
+                          in_issue += 1
+                  rows = fc.parse_feed(response.content, feed, start8, end8)
+                  issue_rows = fc.parse_feed(response.content, feed, start_issue, end_issue)
+                  examples = []
+                  for category, article in rows:
+                      identity = key(article['url'])
+                      if identity in seen_across_new_feeds:
+                          continue
+                      seen_across_new_feeds.add(identity)
+                      if identity in stored:
+                          continue
+                      if len(examples) < 4:
+                          examples.append({'title':article['title'], 'url':article['url'],
+                                           'rss_published_at':article['published_at'],
+                                           'editorial_status':'UNVERIFIED_CANDIDATE'})
+                      unique_new[identity] = {'section':category, **article}
+                  row.update({'status':'ok', 'rss_items':len(entries), 'dates_parsed':readable,
+                              'first_party_links_with_dates':first_party,
+                              'recent_first_party_items_8days':fresh,
+                              'items_in_latest_closed_issue':in_issue,
+                              'pet_candidate_rows_8days':len(rows),
+                              'pet_candidate_rows_latest_issue':len(issue_rows),
+                              'new_unique_examples':examples})
+              except (requests.RequestException, ET.ParseError, KeyError, ValueError) as exc:
+                  row.update({'status':'fetch_or_format_error','error_type':type(exc).__name__})
+              checked.append(row)
+              print('NEW_RSS_DIAG '+json.dumps({k:v for k,v in row.items() if k!='new_unique_examples'},ensure_ascii=False),flush=True)
+
+          # Limit original-page requests; they are NOT needed for the feed diagnosis.
+          # Strict 120-second agreement is mandatory before claiming a verified article.
+          verification = []
+          for item in sorted(unique_new.values(), key=lambda r:r['published_at'], reverse=True)[:8]:
+              status = 'not_verified'
+              try:
+                  claim = bot.parse_aware_timestamp(item['published_at'])
+                  page = bot.get_source(item['url'])
+                  stamps = bot.source_metadata_times(page)
+                  if claim and any(abs((stamp-claim).total_seconds())<=120 for stamp in stamps):
+                      status='publisher_timestamp_matched'
+                  else:
+                      status='publisher_timestamp_unconfirmed'
+              except (requests.RequestException, ValueError, UnicodeError) as exc:
+                  status='publisher_page_unavailable_'+type(exc).__name__
+              verification.append({'url':item['url'], 'publisher':item['publisher'],
+                                   'rss_published_at':item['published_at'], 'status':status})
+              print('NEW_RSS_SOURCE_VERIFY '+json.dumps(verification[-1],ensure_ascii=False),flush=True)
+
+          summary = {
+              'mode':'TEST_ONLY_DO_NOT_PUBLISH',
+              'issue_date':latest_closed.isoformat(),
+              'issue_start':start_issue.isoformat(),
+              'issue_end_exclusive':end_issue.isoformat(),
+              'existing_enabled_sources':sum(bool(f.get('enabled',True)) for f in baseline),
+              'candidate_feeds_checked':len(checked),
+              'candidate_feeds_readable':sum(x['status']=='ok' for x in checked),
+              'unique_additional_unverified_candidate_urls_8days':len(unique_new),
+              'sample_source_metadata_verified':sum(x['status']=='publisher_timestamp_matched' for x in verification),
+              'excluded_due_to_explicit_noncommercial_rss_terms':['이투데이','아시아경제'],
+              'not_promoted_to_production':True,
+              'commercial_rights_review_required':True,
+              'not_sent_to_kakao':True,
+              'no_openai_calls':True,
+          }
+          (output/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          (output/'rss-source-comparison.json').write_text(json.dumps(checked,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          (output/'publisher-time-validation.json').write_text(json.dumps(verification,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          report = ['한국애견신문 국내 RSS 확대 진단 (시험용·발송 금지)',
+                    f"발행일 {latest_closed} / 수집기간 {start_issue.isoformat()} ~ {end_issue.isoformat()} (종료 제외)",
+                    f"기존 RSS {summary['existing_enabled_sources']}개 / 추가 시험 {len(checked)}개 / 접속·파싱 성공 {summary['candidate_feeds_readable']}개",
+                    f"기존 저장본에 없는 후보 URL {len(unique_new)}건 (기사 내용 및 저작권 미검증)",
+                    '상업적 이용을 명시적으로 제한한 이투데이·아시아경제 RSS는 시험에서 제외',
+                    '발견 건수는 발행용 기사 건수가 아닙니다. 원문 시각·산업 적합성·이용 권한 추가 검토 필요.', '']
+          for item in checked:
+              report.append('{} | 상태={} | 8일 펫후보={} | 이번 발행기간 펫후보={} | 최초 링크={} '.format(
+                  item['publisher'],item['status'],item.get('pet_candidate_rows_8days','-'),
+                  item.get('pet_candidate_rows_latest_issue','-'),item.get('first_party_links_with_dates','-')))
+          report.extend(['','원문 검사 샘플: '+str(len(verification))+'건 / 발행시각 일치 '+str(summary['sample_source_metadata_verified'])+'건'])
+          (output/'read-me-first.txt').write_text('\n'.join(report)+'\n',encoding='utf-8')
+          print('RSS_EXPANSION_COMPLETE '+json.dumps(summary,ensure_ascii=False),flush=True)
+
+          PY
+      - name: Save source-comparison report for editorial review
+        uses: actions/upload-artifact@v4
+        with:
+          name: mainstream-domestic-rss-expansion-diagnostic
+          path: expansion-diagnostics/
+          retention-days: 7
+          if-no-files-found: error
