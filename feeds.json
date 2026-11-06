@@ -1,4 +1,25 @@
+
 {
-  "feeds": [],
-  "instructions": "Add verified first-party HTTPS RSS/Atom feeds. Example object: {\"publisher\":\"Original publisher name\",\"category\":\"domestic\",\"url\":\"https://VERIFIED_FEED_URL\",\"hosts\":[\"original-publisher.example\"],\"enabled\":true}. The hosts must exactly match article-link hostnames. No feed URL is prefilled without verification."
+  "feeds": [
+    {
+      "publisher": "뉴스와이어 반려동물",
+      "category": "domestic",
+      "url": "https://api.newswire.co.kr/rss/industry/908",
+      "hosts": [
+        "www.newswire.co.kr",
+        "newswire.co.kr"
+      ],
+      "enabled": true
+    },
+    {
+      "publisher": "뉴스와이어 전체",
+      "category": "domestic",
+      "url": "https://api.newswire.co.kr/rss/all",
+      "hosts": [
+        "www.newswire.co.kr",
+        "newswire.co.kr"
+      ],
+      "enabled": true
+    }
+  ]
 }
