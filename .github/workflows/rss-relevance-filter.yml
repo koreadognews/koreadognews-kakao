@@ -1,0 +1,154 @@
+name: Korean Pet Industry - Tighten Domestic News Relevance (Test Only)
+
+'on':
+  push:
+    branches: [test-safety]
+    paths:
+      - '.github/workflows/rss-relevance-filter.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rss-archive-pilot-test-safety
+  cancel-in-progress: false
+
+jobs:
+  safe-filter-test:
+    if: github.ref == 'refs/heads/test-safety'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout only test branch
+        uses: actions/checkout@v4
+        with:
+          ref: test-safety
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Patch domestic industry relevance only
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import ast
+
+          feed_path = Path('feed_collector.py')
+          source = feed_path.read_text(encoding='utf-8')
+          lines = source.splitlines(keepends=True)
+          matching = [i for i, line in enumerate(lines) if line.startswith('KEYWORDS_KO = ')]
+          if len(matching) != 1:
+              raise RuntimeError('Could not find exactly one KEYWORDS_KO definition; no changes made')
+          terms = (
+              '반려동물', '반려견', '반려묘', '애견', '애묘', '애완동물',
+              '펫푸드', '펫테크', '펫산업', '펫보험', '펫용품', '펫숍', '펫샵',
+              '강아지', '고양이', '동물등록', '유기동물', '펫'
+          )
+          new_line = 'KEYWORDS_KO = ' + repr(terms) + '\n'
+          if lines[matching[0]] != new_line:
+              lines[matching[0]] = new_line
+              feed_path.write_text(''.join(lines), encoding='utf-8')
+              print('UPDATED_FEED_KEYWORDS', flush=True)
+          else:
+              print('FEED_KEYWORDS_ALREADY_SET', flush=True)
+
+          archive_path = Path('rss_archive.py')
+          archive = archive_path.read_text(encoding='utf-8')
+          old_import = 'from feed_collector import parse_feed\n'
+          new_import = 'from feed_collector import parse_feed, KEYWORDS_KO\n'
+          if old_import in archive:
+              archive = archive.replace(old_import, new_import, 1)
+          elif new_import not in archive:
+              raise RuntimeError('Cannot locate archive import; no archive changes made')
+          anchor = (
+              '                if category not in CATEGORIES or not (start <= moment < end) or key in seen:\n'
+              '                    continue\n'
+          )
+          filter_block = (
+              "                # Re-screen old RSS archives, as well as new feeds, for explicit pet context.\n"
+              "                if category in ('domestic_industry', 'domestic_supplement'):\n"
+              "                    topic = (rec.get('title', '') + ' ' + rec.get('summary', '')).lower()\n"
+              "                    if not any(term in topic for term in KEYWORDS_KO):\n"
+              "                        continue\n"
+          )
+          if filter_block not in archive:
+              if archive.count(anchor) != 1:
+                  raise RuntimeError('Could not locate archive replay filter insertion point')
+              archive = archive.replace(anchor, anchor + filter_block, 1)
+              archive_path.write_text(archive, encoding='utf-8')
+              print('UPDATED_ARCHIVE_REPLAY_FILTER', flush=True)
+          else:
+              print('ARCHIVE_REPLAY_FILTER_ALREADY_SET', flush=True)
+          PY
+      - name: Run offline tests (no network / OpenAI / Kakao)
+        env:
+          OPENAI_API_KEY: ''
+          KAKAO_REST_API_KEY: ''
+          KAKAO_REFRESH_TOKEN: ''
+        run: |
+          python -m py_compile feed_collector.py rss_archive.py bot.py
+          python rss_archive.py --selftest
+          python -m unittest discover -s tests -p 'test_*.py' -v
+          python - <<'PY'
+          import datetime as dt
+          import tempfile
+          from pathlib import Path
+          from zoneinfo import ZoneInfo
+          from feed_collector import parse_feed, KEYWORDS_KO
+          from rss_archive import _write_day, load_for_issue
+
+          TZ = ZoneInfo('Asia/Seoul')
+          feed = {'publisher': 'News', 'category': 'domestic', 'hosts': ['publisher.example']}
+          start = dt.datetime(2026, 11, 6, 6, tzinfo=TZ)
+          end = dt.datetime(2026, 11, 7, 6, tzinfo=TZ)
+
+          def rss(title, desc):
+              return ('<rss><channel><item><title>' + title + '</title>'
+                      '<link>https://publisher.example/article</link>'
+                      '<pubDate>Fri, 06 Nov 2026 12:00:00 +0900</pubDate>'
+                      '<description>' + desc + '</description></item></channel></rss>').encode('utf-8')
+
+          assert not parse_feed(rss('국산 라이신 브라질 첫 수출', '일반 사료 제조업체 수출 산업'), feed, start, end)
+          assert not parse_feed(rss('동물 사체 발견', '동물 학대 사건 수사'), feed, start, end)
+          assert len(parse_feed(rss('반려동물 사료 수출 확대', '펫푸드 기업 성장'), feed, start, end)) == 1
+          assert len(parse_feed(rss('고양이 입양 문화행사', '유기동물 보호소 행사'), feed, start, end)) == 1
+          assert '사료' not in KEYWORDS_KO and '동물보호' not in KEYWORDS_KO
+
+          with tempfile.TemporaryDirectory() as folder:
+              folder = Path(folder)
+              day = dt.date(2026, 11, 6)
+              def item(title, summary, suffix):
+                  return {'category': 'domestic_industry', 'title': title,
+                          'summary': summary, 'publisher': 'Test',
+                          'published_at': '2026-11-06T12:00:00+09:00',
+                          'url': 'https://publisher.example/' + suffix}
+              _write_day(folder, day, [
+                  item('국산 라이신 수출', '사료 산업', 'livestock'),
+                  item('반려동물 사료 생산 투자', '펫푸드', 'petfood')
+              ])
+              rows = load_for_issue(dt.date(2026, 11, 7), archive_dir=folder)
+              assert len(rows['domestic_industry']) == 1, rows
+              assert rows['domestic_industry'][0]['url'].endswith('/petfood')
+          print('PET_RELEVANCE_TESTS_PASSED')
+          PY
+          python rss_archive.py --report 2026-11-07
+      - name: Commit only validated test-branch filter
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add feed_collector.py rss_archive.py
+          if git diff --cached --quiet; then
+            echo 'PET_FILTER_NO_CHANGE'
+            exit 0
+          fi
+          git commit -m 'Filter general livestock and unrelated animal news [skip ci]'
+          git pull --rebase origin test-safety
+          git push origin HEAD:test-safety
+          echo 'PET_FILTER_COMMITTED_TEST_SAFETY_ONLY'
