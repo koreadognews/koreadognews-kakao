@@ -1,0 +1,56 @@
+name: Korean Pet Industry RSS Archive Pilot
+
+on:
+  push:
+    branches: [test-safety]
+    paths:
+      - 'rss_archive.py'
+      - '.github/workflows/rss-archive-pilot.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rss-archive-pilot-test-safety
+  cancel-in-progress: false
+
+jobs:
+  archive-pilot:
+    if: github.ref == 'refs/heads/test-safety'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@v4
+        with:
+          ref: test-safety
+          persist-credentials: true
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Offline archive tests (no network)
+        run: |
+          python -m py_compile rss_archive.py feed_collector.py
+          python rss_archive.py --selftest
+      - name: Capture RSS candidates (no Kakao / no OpenAI)
+        run: python rss_archive.py --collect
+      - name: Commit newly archived RSS candidates to test-safety only
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ ! -d data/rss_archive ]; then
+            echo "No new articles in current RSS feeds (not an error)."
+            exit 0
+          fi
+          git add data/rss_archive/
+          if git diff --cached --quiet; then
+            echo "Archive unchanged (duplicate-only or no relevant articles)."
+          else
+            git commit -m "Archive RSS candidates [skip ci]"
+            git push origin HEAD:test-safety
+          fi
