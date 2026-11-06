@@ -28,17 +28,47 @@ def _clean(text):
     return re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', ' ', text or ''))).strip()
 
 
-def _date(text):
+# Only these original Korean government publishers use timezone-less local RSS dates.
+# The inferred timestamp is a CANDIDATE, not a verified original publication time.
+KST_ASSUMED_SOURCES = frozenset({
+    '농림축산식품부 보도자료', '중소벤처기업부 보도자료'
+})
+
+
+def _date(text, *, assume_kst=False):
     if not text:
         return None
+    raw = text.strip()
+    # Korean weekday and month names with explicit KST (e.g. MOIS).
+    korean = re.fullmatch(
+        r'(?:[월화수목금토일],\s*)?(\d{1,2})\s+(\d{1,2})월\s+(\d{4})\s+(\d{2}:\d{2}:\d{2})\s+KST',
+        raw
+    )
+    if korean:
+        day, month, year, hhmmss = korean.groups()
+        try:
+            parsed = dt.datetime.strptime(
+                f'{year}-{int(month):02d}-{int(day):02d} {hhmmss}',
+                '%Y-%m-%d %H:%M:%S'
+            )
+            return parsed.replace(tzinfo=TZ)
+        except ValueError:
+            return None
     try:
-        val = dt.datetime.fromisoformat(text.strip().replace('Z', '+00:00'))
+        value = dt.datetime.fromisoformat(raw.replace('Z', '+00:00'))
     except ValueError:
         try:
-            val = email.utils.parsedate_to_datetime(text.strip())
-        except (TypeError, ValueError, IndexError):
-            return None
-    return val.astimezone(TZ) if val.tzinfo and val.utcoffset() is not None else None
+            # MSS uses YYYYMMDDHHMMSS, without an offset.
+            value = dt.datetime.strptime(raw, '%Y%m%d%H%M%S')
+        except ValueError:
+            try:
+                value = email.utils.parsedate_to_datetime(raw)
+            except (TypeError, ValueError, IndexError):
+                return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        # Never silently assume a timezone for unapproved sources.
+        return value.replace(tzinfo=TZ) if assume_kst else None
+    return value.astimezone(TZ)
 
 
 def _item_link(node):
@@ -68,7 +98,7 @@ def parse_feed(xml_bytes, source, start, end):
             continue
         title = _clean(_field(entry, {'title'}))
         url = _item_link(entry)
-        timestamp = _date(_field(entry, {'published', 'pubDate', 'date', 'issued'}))
+        timestamp = _date(_field(entry, {'published', 'pubDate', 'date', 'issued'}), assume_kst=source.get('publisher') in KST_ASSUMED_SOURCES)
         summary = _clean(_field(entry, {'description', 'summary', 'content', 'encoded'}))[:400]
         if not (title and url and timestamp and start <= timestamp < end):
             continue
