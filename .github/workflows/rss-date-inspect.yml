@@ -1,0 +1,72 @@
+name: Korean Pet Industry RSS Government Date Inspection
+
+'on':
+  push:
+    branches: [test-safety]
+    paths:
+      - '.github/workflows/rss-date-inspect.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-date-fields:
+    if: github.ref == 'refs/heads/test-safety'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout test-safety (read only)
+        uses: actions/checkout@v4
+        with:
+          ref: test-safety
+          persist-credentials: false
+      - name: Inspect raw government RSS date fields (no sends)
+        env:
+          OPENAI_API_KEY: ''
+          KAKAO_REST_API_KEY: ''
+          KAKAO_REFRESH_TOKEN: ''
+          GH_TOKEN: ''
+        run: |
+          python - <<'PY'
+          import json
+          import urllib.request
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          config = json.loads(Path('feeds.json').read_text(encoding='utf-8'))
+          agencies = ('농림축산식품부', '중소벤처기업부', '행정안전부')
+          for feed in config['feeds']:
+              if not feed.get('enabled', True) or not feed.get('publisher', '').startswith(agencies):
+                  continue
+              try:
+                  req = urllib.request.Request(feed['url'], headers={
+                      'User-Agent': 'KoreaDogNewsDateInspector/1.0',
+                      'Accept': 'application/rss+xml, application/atom+xml, text/xml, application/xml'})
+                  with urllib.request.urlopen(req, timeout=15) as response:
+                      payload = response.read(1024 * 1024)
+                  root = ET.fromstring(payload)
+                  entries = [n for n in root.iter() if n.tag.rsplit('}', 1)[-1] in ('item', 'entry')]
+                  print('DATE_SOURCE ' + json.dumps({
+                      'publisher': feed['publisher'], 'entries': len(entries)
+                  }, ensure_ascii=False), flush=True)
+                  for i, entry in enumerate(entries[:3]):
+                      # Collect only field names and date-like values, not article bodies or credentials.
+                      raw_fields = []
+                      for child in list(entry):
+                          tag = child.tag.rsplit('}', 1)[-1]
+                          if (tag.lower() in {'pubdate', 'published', 'updated', 'date', 'issued',
+                                              'created', 'regdate', 'datetime', 'postdate', 'dcdate'}
+                                  or 'date' in tag.lower() or 'time' in tag.lower()):
+                              raw_fields.append({'tag': tag, 'raw': (child.text or '').strip()[:140]})
+                      print('DATE_ITEM ' + json.dumps({
+                          'publisher': feed['publisher'], 'index': i + 1,
+                          'top_level_tags': [c.tag.rsplit('}', 1)[-1] for c in list(entry)],
+                          'raw_date_fields': raw_fields
+                      }, ensure_ascii=False), flush=True)
+              except Exception as exc:
+                  print('DATE_SOURCE_ERROR ' + json.dumps({
+                      'publisher': feed['publisher'], 'type': type(exc).__name__
+                  }, ensure_ascii=False), flush=True)
+          print('DATE_INSPECT_COMPLETE read_only=true no_kakao=true no_openai=true', flush=True)
+          PY
