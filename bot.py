@@ -214,53 +214,115 @@ def validate(data, date, check_http=True):
 
 
 def render(data, date):
+    """Make a single canonical, newspaper-style web edition for both channels."""
     SITE.mkdir(exist_ok=True)
     path = SITE / f'{date.isoformat()}.html'
     issue_date = date + dt.timedelta(days=1)
     start, end = collection_window(issue_date)
+    weekdays = ('월요일', '화요일', '수요일', '목요일', '금요일', '토요일', '일요일')
+    issue_label = f'{issue_date.year}년 {issue_date.month}월 {issue_date.day}일 {weekdays[issue_date.weekday()]}'
+    room = 'https://open.kakao.com/o/g2xkhE1b'
 
-    def article_section(articles, title, overseas=False):
-        items = ''
-        for article in articles:
-            headline = ('[해외] ' if overseas else '') + article['title']
-            items += (f'<li><a href="{html.escape(article["url"], quote=True)}" '
-                      f'rel="noopener noreferrer" target="_blank">'
-                      f'{html.escape(headline)}</a>'
-                      f'<small>{html.escape(article["publisher"])} · '
-                      f'{html.escape(article["published_at"])}</small>'
-                      f'<p>{html.escape(article["summary"])}</p></li>')
-        return f'<h2>{title} ({len(articles)}건)</h2><ol>{items}</ol>'
+    def esc(value):
+        return html.escape(str(value), quote=True)
 
-    event_items = ''
-    for event in data['events']:
-        dates = event['start_date']
-        if event['end_date'] != dates:
-            dates += ' ~ ' + event['end_date']
-        event_items += (f'<li><a href="{html.escape(event["url"], quote=True)}" '
-                        f'rel="noopener noreferrer" target="_blank">'
-                        f'{html.escape(event["title"])}</a> — '
-                        f'{html.escape(dates)}</li>')
-    events_html = ('<h2>향후 한 달간 반려동물 행사</h2><ul>' + event_items + '</ul>'
-                   if event_items else '')
-    domestic = article_section(data['domestic'], '국내 반려동물산업')
-    overseas = article_section(data['international'], '해외 반려동물산업', True)
+    def articles_html(items, heading, overseas=False):
+        sections = [f'<h2>{esc(heading)}</h2>']
+        for number, article in enumerate(items, 1):
+            title = ('[해외] ' if overseas else '') + article['title']
+            try:
+                stamp = dt.datetime.fromisoformat(article['published_at']).astimezone(TZ).strftime('%m.%d %H:%M')
+            except (ValueError, TypeError, KeyError):
+                stamp = '게시시각 확인 필요'
+            sections.append(
+                f'<article class="news"><h3>{number:02d}. {esc(title)}</h3>'
+                f'<div class="meta">{esc(article["publisher"])} | {esc(stamp)}</div>'
+                f'<p>{esc(article["summary"])}</p>'
+                f'<a href="{esc(article["url"])}" target="_blank" '
+                f'rel="noopener noreferrer">기사 원문 보기</a></article>'
+            )
+        if not items:
+            sections.append('<p>확인된 기사가 없습니다.</p>')
+        return ''.join(sections)
+
+    domestic = articles_html(data['domestic'], '국내 반려동물 산업뉴스')
+    international = articles_html(data['international'], '해외 반려동물 산업뉴스', overseas=True)
+    # Existing data lacks a verified 'supplementary' classification: do not guess.
+    events = ['<h2>향후 한 달 펫박람회·문화행사 일정</h2>']
+    if data['events']:
+        events.append('<table><thead><tr><th>행사명</th><th>개최일</th></tr></thead><tbody>')
+        for event in data['events']:
+            first = dt.date.fromisoformat(event['start_date'])
+            last = dt.date.fromisoformat(event['end_date'])
+            when = first.strftime('%m.%d')
+            if last != first:
+                when += '~' + last.strftime('%m.%d')
+            events.append(f'<tr><td><a href="{esc(event["url"])}" target="_blank" '
+                          f'rel="noopener noreferrer">{esc(event["title"])}</a></td>'
+                          f'<td>{esc(when)}</td></tr>')
+        events.append('</tbody></table>')
+    else:
+        events.append('<p>향후 한 달 내 확인된 행사 없음</p>')
+    # The original date-based issue_number() is not editorially verified.
+    verified = os.getenv('VERIFIED_ISSUE_NUMBER', '').strip()
+    issue_no = f' · 제{verified}호' if verified.isdecimal() else ' · 호수 확인 중'
+    intro = ('아래 뉴스는 ‘애견신문사’에서 국내외 미디어와 정부기관·지자체·연구기관을 '
+             '통해 공개된 반려동물 산업 관련 최신 정보를 간추린 소식지입니다.')
     page = f'''<!doctype html><html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>반려동물산업 소식지 {issue_date}</title>
-<style>body{{font-family:system-ui,'Malgun Gothic',sans-serif;max-width:760px;
-margin:35px auto;padding:0 18px;color:#202a32;line-height:1.65}}
-h1{{color:#16445c}}li{{margin:16px 0}}a{{color:#086390;font-weight:650}}
-small{{display:block;color:#64748b}}footer{{border-top:1px solid #ddd;
-padding-top:16px;color:#555}}</style></head><body>
-<h1>🔹 반려동물산업 소식지 🔹</h1>
-<p>발행 - {issue_number(date)}호 · {issue_date} / 기사 기준일 {date}</p>
-<p>기사 수집 기간: {start:%Y-%m-%d %H:%M} 이상 ~ {end:%Y-%m-%d %H:%M} 미만 (한국시간)</p>
-<p>한국애견신문에서 산업 보도, 정부 및 연구기관 자료를 선별했습니다.
-원문과 행사 정보는 각 링크를 확인하세요.</p>
-{domestic}{overseas}{events_html}
-<footer>펫비즈니스방: <a href="https://open.kakao.com/o/g2xkhE1b">참가하기</a>
-<br><a href="https://www.koreadognews.co.kr">한국애견신문</a> ·
-newsdog@naver.com</footer></body></html>'''
+<title>애견신문사 · 반려동물산업 소식지 {issue_date}</title>
+<style>
+*{{box-sizing:border-box}}body{{margin:0;background:#f5f7f9;color:#22313d;
+font:16px/1.7 system-ui,'Malgun Gothic',sans-serif}}
+main{{max-width:790px;margin:24px auto;padding:36px;background:#fff}}
+.brand{{font-size:13px;font-weight:700;letter-spacing:.07em;color:#34647c}}
+h1{{font-size:29px;margin:5px 0 8px}}h2{{font-size:21px;border-top:2px solid #334c5a;
+padding-top:16px;margin-top:35px}}h3{{font-size:17px;line-height:1.5;margin:0 0 7px}}
+.meta{{font-size:13px;color:#647582}}.news{{padding:20px 0;border-bottom:1px solid #dfe6eb}}
+.news p{{margin:10px 0}}a{{color:#14618b;text-decoration:none;overflow-wrap:anywhere}}
+a:hover{{text-decoration:underline}}.room{{padding:12px 16px;background:#f1f7fa;
+margin:20px 0;border-left:3px solid #286789}}.room strong{{display:block}}
+table{{width:100%;border-collapse:collapse;font-size:14px}}th,td{{padding:11px 8px;
+border-bottom:1px solid #dfe6eb;text-align:left}}th{{background:#f2f6f9}}
+footer{{border-top:2px solid #334c5a;margin-top:35px;padding-top:20px;font-size:14px}}
+.copy{{text-align:right;margin:10px 0}}button{{padding:9px 12px;border:1px solid #b5cad6;
+border-radius:6px;background:#fff;color:#14587e;cursor:pointer}}
+@media(max-width:650px){{main{{margin:0;padding:22px 17px}}h1{{font-size:25px}}}}
+</style></head><body><main id="edition">
+<div class="brand">애견신문사 · KOREA DOG NEWS</div>
+<h1>반려동물산업 소식지</h1>
+<div class="meta">{esc(issue_label)}{esc(issue_no)}</div>
+<div class="meta">뉴스 집계: {start:%Y.%m.%d %H:%M} ~ {end:%Y.%m.%d %H:%M} 미만 (KST)</div>
+<p>기사 기준일 {date}</p>
+<div class="copy"><button type="button" onclick="copyEdition()">▣ 소식지 전문 복사</button></div>
+<p>{esc(intro)}</p>
+<div class="room"><strong>펫비즈니스방 참가하기</strong>
+반려동물산업 관계자 단톡방<br><a href="{room}">{room}</a></div>
+<h2>편집 기준 안내</h2><p>국내 {len(data['domestic'])}건 · 해외 {len(data['international'])}건.
+집계기간에 해당하는 확인 자료만 수록하고 목표 수를 채우기 위해 과거 기사를 추가하지 않았습니다.</p>
+{domestic}{international}{''.join(events)}
+<footer><strong>애견신문사 · KOREA DOG NEWS</strong><br>
+홈페이지: <a href="https://www.koreadognews.co.kr">www.koreadognews.co.kr</a><br>
+광고·제보 02-1566-5663<br>newsdog@naver.com
+<div class="room"><strong>펫비즈니스방 참가하기</strong>
+반려동물산업 관계자 단톡방<br><a href="{room}">{room}</a></div>
+</footer></main><script>
+function copyEdition(){{
+ const el=document.getElementById('edition').cloneNode(true);
+ el.querySelector('.copy')?.remove();
+ el.querySelectorAll('a').forEach(a=>{{
+   a.replaceWith(document.createTextNode((a.textContent||'').trim()+' '+a.href));
+ }});
+ el.style.position='fixed';el.style.left='-10000px';el.style.top='0';
+ document.body.appendChild(el);
+ const text=(el.innerText||el.textContent).trim();
+ el.remove();
+ if(navigator.clipboard&&window.isSecureContext){{
+ navigator.clipboard.writeText(text).then(()=>alert('소식지 전문을 복사했습니다.'),
+ ()=>alert('복사에 실패했습니다.'));}}
+ else{{alert('복사를 지원하지 않는 환경입니다.');}}
+}}
+</script></body></html>'''
     path.write_text(page, encoding='utf-8')
     (SITE / 'index.html').write_text(page, encoding='utf-8')
     return path
