@@ -1,0 +1,67 @@
+name: Kakao newsletter one-time delivery test
+on:
+  push:
+    branches: [kakao-test-20261115]
+    paths: [.github/workflows/kakao-test-20261115.yml]
+permissions:
+  contents: read
+concurrency:
+  group: kakao-test-20261115
+  cancel-in-progress: false
+jobs:
+  send-test:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt
+      - name: Verify token update permission
+        env:
+          GH_TOKEN: ${{ secrets.GH_SECRETS_TOKEN }}
+        run: |
+          test -n "$GH_TOKEN"
+          gh api repos/koreadognews/koreadognews-kakao/actions/secrets/public-key > /dev/null
+      - name: Send a single labeled Kakao test message
+        env:
+          KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
+          KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
+          KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
+        run: |
+          test -n "$KAKAO_REST_API_KEY"
+          test -n "$KAKAO_REFRESH_TOKEN"
+          python - <<'PY'
+          import requests
+          from bot import send_kakao
+
+          base = 'https://koreadognews.github.io/koreadognews-kakao'
+          date = '2026-11-14'
+          page_url = f'{base}/{date}.html'
+          page = requests.get(page_url, timeout=20)
+          page.raise_for_status()
+          if f'기사 기준일 {date}' not in page.text:
+              raise RuntimeError('Published page does not match the requested issue date')
+          issue = requests.get(f'{base}/{date}.json', timeout=20)
+          issue.raise_for_status()
+          data = issue.json()
+          domestic = len(data['domestic'])
+          international = len(data['international'])
+          message = (
+              '[시험 발송] 한국애견신문 반려동물산업 소식지\n'
+              '2026년 11월 15일 발행본\n'
+              f'국내 {domestic}건 / 해외 {international}건\n'
+              '새 모델 적용 후 Pages 링크 및 카카오톡 발송 확인'
+          )
+          send_kakao(message, page_url)
+          print(f'KAKAO_TEST_ACCEPTED url={page_url} domestic={domestic} international={international}', flush=True)
+          PY
+      - name: Persist rotated Kakao token when present
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_SECRETS_TOKEN }}
+        run: python sync_kakao_token.py
