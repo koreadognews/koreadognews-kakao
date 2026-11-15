@@ -38,7 +38,7 @@ jobs:
       KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
       KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
       PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
-      OPENAI_MODEL: gpt-5-mini
+      OPENAI_MODEL: gpt-6.1-terra
 
     steps:
       - name: Checkout code
