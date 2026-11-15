@@ -7,6 +7,10 @@ permissions:
   contents: read
 jobs:
   generate:
+    strategy:
+      fail-fast: false
+      matrix:
+        model: [gpt-5-mini, gpt-6.1-terra]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -21,19 +25,18 @@ jobs:
       - name: Generate and validate HTML and JSON locally
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ matrix.model }}
           PUBLIC_BASE_URL: https://example.invalid
         run: |
           if [ -z "$OPENAI_API_KEY" ]; then
             echo 'The repository OpenAI API key is unavailable to this run.'
             exit 1
           fi
-          python bot.py
+          python bot.py --date 2026-11-14
           python - <<'PY'
           from pathlib import Path
           import json
-          from bot import target_date
-
-          date = target_date().isoformat()
+          date = '2026-11-14'
           data = json.loads(Path(f'docs/{date}.json').read_text(encoding='utf-8'))
           page = Path(f'docs/{date}.html').read_text(encoding='utf-8')
           assert all(isinstance(data[key], list) for key in ('domestic', 'international', 'events'))
