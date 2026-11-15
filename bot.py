@@ -83,7 +83,7 @@ Return ONLY JSON, exactly this structure:
     for attempt in range(3):
         try:
             response = client.responses.create(
-                model=os.getenv('OPENAI_MODEL', 'gpt-5-mini'),
+                model=os.getenv('OPENAI_MODEL', 'gpt-6.1-terra'),
                 tools=[{'type': 'web_search'}], input=prompt)
             break
         except (APIConnectionError, APITimeoutError,
