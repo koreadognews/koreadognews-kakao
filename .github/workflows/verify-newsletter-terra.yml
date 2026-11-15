@@ -1,0 +1,44 @@
+name: Validate newsletter Terra without publishing
+on:
+  push:
+    branches: [verify-newsletter-terra]
+    paths: [.github/workflows/verify-newsletter-terra.yml]
+permissions:
+  contents: read
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -p 'test_safety.py' -v
+      - name: Generate and validate HTML and JSON locally
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PUBLIC_BASE_URL: https://example.invalid
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo 'The repository OpenAI API key is unavailable to this run.'
+            exit 1
+          fi
+          python bot.py
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          from bot import target_date
+
+          date = target_date().isoformat()
+          data = json.loads(Path(f'docs/{date}.json').read_text(encoding='utf-8'))
+          page = Path(f'docs/{date}.html').read_text(encoding='utf-8')
+          assert all(isinstance(data[key], list) for key in ('domestic', 'international', 'events'))
+          assert data['domestic'] or data['international'], 'No verified articles generated'
+          assert f'기사 기준일 {date}' in page
+          assert all(article['title'] and article['url'] for key in ('domestic', 'international') for article in data[key])
+          print(f"Verified HTML/JSON for {date}: {len(data['domestic'])} domestic, {len(data['international'])} international, {len(data['events'])} events")
+          PY
