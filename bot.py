@@ -272,29 +272,30 @@ def render(data, date):
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>애견신문사 · 반려동물산업 소식지 {issue_date}</title>
 <style>
-*{{box-sizing:border-box}}body{{margin:0;background:#f5f7f9;color:#22313d;
-font:16px/1.7 system-ui,'Malgun Gothic',sans-serif}}
-main{{max-width:790px;margin:24px auto;padding:36px;background:#fff}}
-.brand{{font-size:13px;font-weight:700;letter-spacing:.07em;color:#34647c}}
-h1{{font-size:29px;margin:5px 0 8px}}h2{{font-size:21px;border-top:2px solid #334c5a;
-padding-top:16px;margin-top:35px}}h3{{font-size:17px;line-height:1.5;margin:0 0 7px}}
-.meta{{font-size:13px;color:#647582}}.news{{padding:20px 0;border-bottom:1px solid #dfe6eb}}
-.news p{{margin:10px 0}}a{{color:#14618b;text-decoration:none;overflow-wrap:anywhere}}
-a:hover{{text-decoration:underline}}.room{{padding:12px 16px;background:#f1f7fa;
-margin:20px 0;border-left:3px solid #286789}}.room strong{{display:block}}
-table{{width:100%;border-collapse:collapse;font-size:14px}}th,td{{padding:11px 8px;
-border-bottom:1px solid #dfe6eb;text-align:left}}th{{background:#f2f6f9}}
-footer{{border-top:2px solid #334c5a;margin-top:35px;padding-top:20px;font-size:14px}}
-.copy{{text-align:right;margin:10px 0}}button{{padding:9px 12px;border:1px solid #b5cad6;
-border-radius:6px;background:#fff;color:#14587e;cursor:pointer}}
-@media(max-width:650px){{main{{margin:0;padding:22px 17px}}h1{{font-size:25px}}}}
+*{{box-sizing:border-box}}:root{{color-scheme:light}}
+body{{margin:0;background:#e9e6df;color:#262922;font:16px/1.8 system-ui,'Malgun Gothic',sans-serif}}
+main{{max-width:960px;margin:36px auto;padding:48px 56px;background:#fffef9;border:1px solid #d1cbbb;box-shadow:0 8px 30px #3331}}
+.brand{{border-top:5px solid #263b30;border-bottom:1px solid #263b30;padding:14px 0;text-align:center;font-family:Georgia,'Batang',serif;font-size:24px;font-weight:700;letter-spacing:.08em;color:#263b30}}
+h1{{font-family:'Batang',serif;font-size:38px;line-height:1.4;text-align:center;margin:24px 0 16px}}
+h2{{font-family:'Batang',serif;font-size:23px;border-top:3px double #263b30;border-bottom:1px solid #d1cbbb;padding:12px 0;margin:40px 0 0}}
+h3{{font-size:19px;line-height:1.6;margin:0 0 8px;word-break:keep-all}}
+.meta{{font-size:13px;color:#657063}}header .meta{{text-align:center}}
+.news{{padding:24px 0;border-bottom:1px solid #d1cbbb;break-inside:avoid}}
+.news p{{margin:12px 0}}a{{color:#315d47;text-underline-offset:4px;overflow-wrap:anywhere}}
+a:hover{{color:#111}}.room{{padding:16px 20px;background:#eef1e8;margin:24px 0;border-left:4px solid #365640}}
+.room strong{{display:block}}table{{width:100%;border-collapse:collapse;font-size:15px}}th,td{{padding:14px 12px;border-bottom:1px solid #d1cbbb;text-align:left}}th{{background:#eef1e8}}td:last-child{{white-space:nowrap}}
+footer{{border-top:3px double #263b30;margin-top:40px;padding-top:24px;font-size:14px}}
+.copy{{display:flex;justify-content:flex-end;align-items:center;gap:12px;margin:20px 0;font-size:13px}}
+button{{font:inherit;padding:10px 16px;border:1px solid #365640;border-radius:2px;background:#263b30;color:#fff;cursor:pointer}}button:hover{{background:#3e5946}}button:focus-visible,a:focus-visible{{outline:3px solid #b78935;outline-offset:3px}}
+@media(max-width:650px){{main{{margin:0;padding:24px 20px;border:0;box-shadow:none}}.brand{{font-size:17px;letter-spacing:.03em}}h1{{font-size:29px}}h2{{font-size:21px}}h3{{font-size:18px}}th,td{{padding:12px 6px}}.copy{{flex-wrap:wrap}}}}
+@media print{{body{{background:white}}main{{margin:0;padding:0;max-width:none;box-shadow:none;border:0}}.copy{{display:none}}a{{color:inherit}}}}
 </style></head><body><main id="edition">
-<div class="brand">애견신문사 · KOREA DOG NEWS</div>
+<header><div class="brand">애견신문사 · KOREA DOG NEWS</div>
 <h1>반려동물산업 소식지</h1>
 <div class="meta">{esc(issue_label)}{esc(issue_no)}</div>
 <div class="meta">뉴스 집계: {start:%Y.%m.%d %H:%M} ~ {end:%Y.%m.%d %H:%M} 미만 (KST)</div>
-<p>기사 기준일 {date}</p>
-<div class="copy"><button type="button" onclick="copyEdition()">▣ 소식지 전문 복사</button></div>
+<p class="meta">기사 기준일 {date}</p></header>
+<div class="copy"><span id="copy-status" role="status" aria-live="polite"></span><button id="copy-button" type="button" onclick="copyEdition()">소식지 전문 복사</button></div>
 <p>{esc(intro)}</p>
 <div class="room"><strong>펫비즈니스방 참가하기</strong>
 반려동물산업 관계자 단톡방<br><a href="{room}">{room}</a></div>
@@ -307,7 +308,7 @@ border-radius:6px;background:#fff;color:#14587e;cursor:pointer}}
 <div class="room"><strong>펫비즈니스방 참가하기</strong>
 반려동물산업 관계자 단톡방<br><a href="{room}">{room}</a></div>
 </footer></main><script>
-function copyEdition(){{
+async function copyEdition(){{
  const el=document.getElementById('edition').cloneNode(true);
  el.querySelector('.copy')?.remove();
  el.querySelectorAll('a').forEach(a=>{{
@@ -317,10 +318,20 @@ function copyEdition(){{
  document.body.appendChild(el);
  const text=(el.innerText||el.textContent).trim();
  el.remove();
+ const status=document.getElementById('copy-status');
+ let copied=false;
  if(navigator.clipboard&&window.isSecureContext){{
- navigator.clipboard.writeText(text).then(()=>alert('소식지 전문을 복사했습니다.'),
- ()=>alert('복사에 실패했습니다.'));}}
- else{{alert('복사를 지원하지 않는 환경입니다.');}}
+   try{{await navigator.clipboard.writeText(text);copied=true;}}catch(error){{/* Try selection copy below. */}}
+ }}
+ if(!copied){{
+   const field=document.createElement('textarea');
+   field.value=text;field.setAttribute('readonly','');
+   field.style.position='fixed';field.style.top='0';field.style.left='-10000px';
+   document.body.appendChild(field);field.focus();field.select();
+   try{{copied=document.execCommand('copy');}}catch(error){{copied=false;}}
+   field.remove();document.getElementById('copy-button').focus();
+ }}
+ status.textContent=copied?'소식지 전문을 복사했습니다.':'복사하지 못했습니다. 본문을 선택해 복사해 주세요.';
 }}
 </script></body></html>'''
     path.write_text(page, encoding='utf-8')
